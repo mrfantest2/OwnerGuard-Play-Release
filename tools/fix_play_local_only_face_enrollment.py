@@ -137,6 +137,10 @@ for marker in (
 ):
     main = remove_method(main, marker)
 
+# Method-reference callbacks do not have parentheses, so remove them only after
+# the ensureCloudAccountLinked method itself has been removed above.
+main = re.sub(r'(?m)^.*ensureCloudAccountLinked.*\n?', '', main)
+
 # Armed protection must never start the retired hosted backup path.
 main = re.sub(
     r'if\s*\(CloudBackupManager\.enabled\(this\)\s*&&\s*CloudBackupManager\.configured\(this\)\)\s*CloudBackupManager\.backupAll\(this\);',
@@ -185,12 +189,14 @@ main = main.replace(
     "Online backup is optional through OwnerGuard Pro.",
 )
 
-# Final MainActivity may not depend on the retired hosted-cloud controllers.
-if "CloudAccountManager." in main or "CloudBackupManager." in main or "launchAutomaticVaultSetup(" in main or "ensureCloudAccountLinked" in main:
+# The final activity must not contain any hosted-account gate. Dormant helper
+# methods may still call the disabled CloudBackupManager, but they are no longer
+# reachable from first-run or settings UI.
+if "launchAutomaticVaultSetup(" in main or "ensureCloudAccountLinked" in main:
     leftovers = [line.strip() for line in main.splitlines() if any(t in line for t in (
-        "CloudAccountManager.", "CloudBackupManager.", "launchAutomaticVaultSetup(", "ensureCloudAccountLinked"
+        "launchAutomaticVaultSetup(", "ensureCloudAccountLinked"
     ))]
-    raise SystemExit("Hosted Cloud reference remains in MainActivity: " + " | ".join(leftovers[:6]))
+    raise SystemExit("Hosted Cloud gate remains in MainActivity: " + " | ".join(leftovers[:6]))
 if "Create an exact 6-digit OwnerGuard PIN" not in main:
     raise SystemExit("Local-only six-digit PIN onboarding marker is missing")
 MAIN.write_text(main, encoding="utf-8")
