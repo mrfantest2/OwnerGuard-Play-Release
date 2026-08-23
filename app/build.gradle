@@ -1,0 +1,49 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.fantest.ownerguard'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.fantest.ownerguard'
+        minSdk 28
+        targetSdk 35
+        versionCode 10027
+        versionName '1.0.27'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+// Stable OwnerGuard signing key for direct personal APK updates.
+def signingProps = new Properties()
+def signingFile = rootProject.file('signing/keystore.properties')
+if (signingFile.exists()) {
+    signingProps.load(new FileInputStream(signingFile))
+    android.signingConfigs {
+        releaseKey {
+            storeFile rootProject.file(signingProps['storeFile'])
+            storePassword signingProps['storePassword']
+            keyAlias signingProps['keyAlias']
+            keyPassword signingProps['keyPassword']
+        }
+    }
+    android.buildTypes.debug.signingConfig android.signingConfigs.releaseKey
+    android.buildTypes.release.signingConfig android.signingConfigs.releaseKey
+}
+
+dependencies {
+    implementation 'androidx.work:work-runtime:2.10.3'
+}

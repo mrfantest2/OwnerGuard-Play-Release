@@ -1,0 +1,6 @@
+OwnerGuard v1.0.14
+- Internal video playback now uses the authenticated decrypted cache file directly
+- External video player remains as fallback
+- OwnerGuard locks immediately when all app screens leave the foreground
+- Added automatic front-camera owner selfie verification test
+- Added spoken voice guidance and adjustment prompts during five-angle enrollment

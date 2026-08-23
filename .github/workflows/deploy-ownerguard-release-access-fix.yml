@@ -1,0 +1,164 @@
+name: Verify OwnerGuard 1.0.35 Mandatory APK Access
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/deploy-ownerguard-release-access-fix.yml
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: ownerguard-release-access-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Mark access check pending
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -d "{\"state\":\"pending\",\"context\":\"ownerguard/release-access\",\"description\":\"Checking mandatory Android 1.0.35 access\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - uses: actions/checkout@v6
+
+      - name: Prepare release access package
+        run: |
+          set -euo pipefail
+          rm -rf .release_access
+          mkdir -p .release_access/ownerguard_cloud/releases
+          cat > .release_access/ownerguard_cloud/releases/.htaccess <<'HTACCESS'
+          Options -Indexes
+          <IfModule mod_authz_core.c>
+            <FilesMatch "^(?!release\.json$|OwnerGuard-[0-9]+\.[0-9]+\.[0-9]+\.apk$).+">
+              Require all denied
+            </FilesMatch>
+          </IfModule>
+          <IfModule !mod_authz_core.c>
+            <FilesMatch "^(?!release\.json$|OwnerGuard-[0-9]+\.[0-9]+\.[0-9]+\.apk$).+">
+              Order Allow,Deny
+              Deny from all
+            </FilesMatch>
+          </IfModule>
+          HTACCESS
+          python3 - <<'PY'
+          import json,pathlib
+          root=pathlib.Path('.release_access/ownerguard_cloud')
+          deploy={
+              'project':'ownerguard_cloud','slug':'ownerguard_cloud','host':'ki',
+              'mode':'merge','strategy':'merge',
+              'preserve':['data','releases/release.json','releases/OwnerGuard-1.0.35.apk']
+          }
+          (root/'deploy.json').write_text(json.dumps(deploy,indent=2)+'\n',encoding='utf-8')
+          PY
+          cd .release_access/ownerguard_cloud
+          zip -q -r ../OwnerGuard-1.0.35-Release-Access.zip .
+          cd ../..
+
+      - name: Deploy release access policy
+        run: |
+          set -euo pipefail
+          PACKAGE=.release_access/OwnerGuard-1.0.35-Release-Access.zip
+          deployed=0
+          for endpoint in \
+            "https://ki.fantest.win/universal_deployer.php?action=deploy" \
+            "https://ki.fantest.win/ud.php?action=deploy"; do
+            if curl -f -sS -L --connect-timeout 30 --max-time 300 \
+              -H "Accept: application/json" \
+              -H "X-Termux-Deployer: universal-deployer-v3" \
+              -F "file=@${PACKAGE}" -F "zip=@${PACKAGE}" -F "archive=@${PACKAGE}" \
+              -F "slug=ownerguard_cloud" -F "project=ownerguard_cloud" -F "host=ki" \
+              -F "mode=merge" -F "strategy=merge" \
+              -F "source=github_actions_ownerguard_release_access_1_0_35" \
+              "${endpoint}" | tee .release_access/deploy-response.txt; then
+              deployed=1
+              break
+            fi
+          done
+          test "$deployed" -eq 1
+
+      - name: Verify Android 1.0.35 manifest and APK
+        run: |
+          set -euo pipefail
+          verified=0
+          for attempt in $(seq 1 12); do
+            if curl -f -sS -L -H "Cache-Control: no-cache" \
+              "https://ki.fantest.win/ownerguard_cloud/releases/release.json?verify=${GITHUB_RUN_ID}-${attempt}" \
+              -o .release_access/release.json; then
+              if python3 - <<'PY'
+          import json,pathlib
+          p=json.loads(pathlib.Path('.release_access/release.json').read_text())
+          assert p.get('available') is True and p.get('forceUpdate') is True
+          assert p.get('updatePolicy')=='mandatory'
+          assert p.get('minimumVersionCode')==10035
+          assert p.get('packageName')=='com.fantest.ownerguard'
+          assert p.get('versionCode')==10035 and p.get('versionName')=='1.0.35'
+          assert p.get('apkUrl')=='/ownerguard_cloud/releases/OwnerGuard-1.0.35.apk'
+          assert len(p.get('sha256',''))==64 and int(p.get('size',0))>1000000
+          PY
+              then
+                EXPECTED_SHA="$(python3 -c "import json;print(json.load(open('.release_access/release.json'))['sha256'])")"
+                EXPECTED_SIZE="$(python3 -c "import json;print(json.load(open('.release_access/release.json'))['size'])")"
+                if curl -f -sS -L -H "Cache-Control: no-cache" \
+                  "https://ki.fantest.win/ownerguard_cloud/releases/OwnerGuard-1.0.35.apk?verify=${GITHUB_RUN_ID}-${attempt}" \
+                  -o .release_access/OwnerGuard-1.0.35.apk; then
+                  ACTUAL_SHA="$(sha256sum .release_access/OwnerGuard-1.0.35.apk|awk '{print $1}')"
+                  ACTUAL_SIZE="$(stat -c '%s' .release_access/OwnerGuard-1.0.35.apk)"
+                  if [ "$ACTUAL_SHA" = "$EXPECTED_SHA" ] && [ "$ACTUAL_SIZE" = "$EXPECTED_SIZE" ]; then
+                    verified=1
+                    break
+                  fi
+                fi
+              fi
+            fi
+            sleep 5
+          done
+          test "$verified" -eq 1
+
+      - name: Retain evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: OwnerGuard-1.0.35-Release-Access
+          path: |
+            .release_access/OwnerGuard-1.0.35-Release-Access.zip
+            .release_access/deploy-response.txt
+            .release_access/release.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Mark access check successful
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -d "{\"state\":\"success\",\"context\":\"ownerguard/release-access\",\"description\":\"Mandatory Android 1.0.35 APK accessible\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - name: Mark access check failed
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -d "{\"state\":\"failure\",\"context\":\"ownerguard/release-access\",\"description\":\"OwnerGuard 1.0.35 APK access check failed\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"

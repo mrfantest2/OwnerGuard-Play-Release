@@ -1,0 +1,5 @@
+OwnerGuard v1.0.21 build correction
+
+Fixed the cloud sign-up callback in MainActivity.java.
+The removed renderTabs() call now refreshes the existing Vault & settings tab with showVaultTab().
+Package ID, version code, version name, vault format, and release signing key are unchanged.

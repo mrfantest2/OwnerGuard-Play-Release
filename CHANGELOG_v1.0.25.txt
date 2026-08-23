@@ -1,0 +1,8 @@
+OwnerGuard Android v1.0.25
+
+- New encrypted evidence uploads are owned by the signed-in OwnerGuard Cloud account.
+- Uses the account API token for uploads; legacy one-time upload token remains as fallback.
+- Adds privacy-preserving device identifiers and device labels to each upload.
+- Cloud backup setup no longer requires a legacy upload token when an account is signed in.
+- Recovery-key instructions now match the per-user Administrator Vault Browser.
+- Preserves package com.fantest.ownerguard, version continuity, stable signing configuration, local vault, settings, and update flow.

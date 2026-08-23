@@ -1,0 +1,7 @@
+OwnerGuard v1.0.7 S25 capture pipeline fix
+- Selects front-camera supported JPEG and MediaRecorder sizes
+- Adds autofocus/exposure warm-up with a private preview surface
+- Adds a 1.5-second Samsung camera HAL handoff before video
+- Keeps 3 encrypted photos and a 5-second encrypted silent video
+- Adds encrypted diagnostics: camera ID, sizes, session readiness, videoSaved, errors
+- Notification reports saved photo/video counts after each capture

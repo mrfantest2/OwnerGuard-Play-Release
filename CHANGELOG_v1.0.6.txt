@@ -1,0 +1,8 @@
+OwnerGuard v1.0.6
+- Dedicated in-app front-camera owner enrollment
+- Five guided poses: center, left, right, up, down
+- Full JPEG samples instead of generic camera thumbnail
+- Quality gates for face size, lighting, exposure, and image detail
+- Stores five independent local owner templates
+- Best-match and mirrored comparison across all enrolled angles
+- Existing 5-second encrypted video and pattern/PIN/password monitoring retained

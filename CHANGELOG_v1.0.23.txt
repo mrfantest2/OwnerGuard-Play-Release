@@ -1,0 +1,9 @@
+OwnerGuard v1.0.23
+
+- Added a compact first-photo thumbnail to every vault incident row.
+- Added a 5-second video badge over the thumbnail when video evidence exists.
+- Decrypts thumbnails only after vault authentication.
+- Uses low-resolution sampled decoding and a private in-memory LRU cache.
+- Deletes temporary clear JPEG files immediately after decoding.
+- Shows neutral No photo / No preview placeholders when evidence is missing or unreadable.
+- Preserves compact Today / Yesterday / date grouping and Newest / Oldest sorting.

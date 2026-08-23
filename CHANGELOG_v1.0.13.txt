@@ -1,0 +1,8 @@
+OwnerGuard v1.0.13
+- Dedicated secure full-screen video player with system-player fallback
+- Fixed vault session routing and reopen-after-authentication
+- Prevents OwnerGuard UI from resurfacing after device unlock by closing on screen-off
+- Modern numeric keypad unlock screen with biometric and keyboard fallback
+- Replaced long dashboard with Overview, Protection, and Vault & settings tabs
+- Added minimal lock-screen notification content mode; foreground notification remains visible as required by Android
+- Extended authenticated vault session to 10 minutes, locked immediately on screen-off

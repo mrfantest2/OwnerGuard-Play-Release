@@ -1,0 +1,6 @@
+TERMUX EDGE AUTO BUILD
+
+The ZIP root contains build_termux.sh. Termux Edge should select it before Gradle.
+The native build uses the installed ARM64 Termux tools: aapt2, javac, jar, d8, zipalign, and apksigner.
+Output: /sdcard/Download/OwnerGuard_Android_v1.0.4_PATTERN_PIN_PASSWORD.apk
+The package installer opens after a successful signed build.

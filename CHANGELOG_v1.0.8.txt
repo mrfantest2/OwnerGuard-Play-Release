@@ -1,0 +1,6 @@
+OwnerGuard v1.0.8
+- Fixed vault photo orientation by applying EXIF rotation on display
+- Improved in-vault video playback with fixed video area, media controls, and rotation handling
+- Polished vault and incident detail UI
+- Improved dashboard styling and updated shield icon
+- Launcher remains visible; app drawer hiding was not implemented

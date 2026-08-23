@@ -1,0 +1,13 @@
+name: Legacy OwnerGuard Cloud Deployment (Manual Only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  superseded:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Superseded by OwnerGuard 1.0.36 Native Cloud Workspace workflow."

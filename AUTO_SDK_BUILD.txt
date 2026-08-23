@@ -1,0 +1,3 @@
+OwnerGuard v1.0.26 automatic Windows build package.
+This package installs Android command-line tools, platform 33, and build-tools 33.0.2 when the build machine has no configured SDK.
+Package name and included release signing key are unchanged.

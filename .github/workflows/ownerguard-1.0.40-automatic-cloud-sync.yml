@@ -1,0 +1,13 @@
+name: OwnerGuard 1.0.40 Superseded
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  superseded:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "OwnerGuard 1.0.40 is superseded by the 1.0.41 simple automatic vault release."

@@ -1,0 +1,7 @@
+OwnerGuard v1.0.10
+- Fixed side-angle enrollment getting stuck on Samsung devices
+- Added face-center movement fallback when Euler yaw/pitch is unavailable
+- Reduced stable countdown from four frames to three
+- Added automatic pose timeout fallback
+- Added Use current clear angle fallback button after 3.5 seconds
+- Loosened side and vertical pose thresholds while preserving five separate samples

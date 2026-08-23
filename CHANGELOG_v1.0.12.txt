@@ -1,0 +1,6 @@
+OwnerGuard v1.0.12
+- Immediate capture after failed pattern, PIN, or password while armed
+- Failed-attempt capture preserves the failure counter for the later successful-unlock incident
+- Additional attempts during an active recording queue one follow-up capture
+- Default-enabled dashboard toggle for immediate failed-attempt capture
+- Includes v1.0.11 video playback, secure sharing, timestamp, and optional location features

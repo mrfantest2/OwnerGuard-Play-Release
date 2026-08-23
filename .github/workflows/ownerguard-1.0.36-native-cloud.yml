@@ -1,0 +1,16 @@
+name: OwnerGuard 1.0.36 Native Cloud Workspace — superseded
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  superseded:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Release status
+        run: |
+          echo "OwnerGuard 1.0.36 is superseded by the 1.0.37 vertical Cloud control-center workflow."
+          echo "This workflow remains manual-only to prevent an older mandatory APK from replacing a newer release."

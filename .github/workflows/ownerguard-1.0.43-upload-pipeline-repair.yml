@@ -1,0 +1,339 @@
+name: OwnerGuard 1.0.43 Upload Pipeline Repair
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - release/1.0.43-upload-pipeline-repair
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: ownerguard-upload-pipeline-repair-1-0-43
+  cancel-in-progress: true
+
+jobs:
+  build-deploy-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+
+    steps:
+      - name: Mark production release pending
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -d "{\"state\":\"pending\",\"context\":\"ownerguard/1.0.43-release\",\"description\":\"Repairing Cloud upload pipeline\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Configure Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Reconstruct and validate Cloud 1.3.27.7
+        run: |
+          set -euo pipefail
+          python3 tools/build_cloud_payload_1_0_43.py
+          grep -q "OwnerGuard Cloud 1.3.27.7" .deploy/ownerguard_cloud/VERSION
+          grep -q "const OG_VERSION = '1.3.27.7';" .deploy/ownerguard_cloud/includes/core.php
+          grep -q "E=HTTP_AUTHORIZATION:%1" .deploy/ownerguard_cloud/.htaccess
+          grep -q "SetEnvIfNoCase Authorization" .deploy/ownerguard_cloud/.htaccess
+          grep -q "REDIRECT_HTTP_AUTHORIZATION" .deploy/ownerguard_cloud/includes/core.php
+          grep -q "getallheaders" .deploy/ownerguard_cloud/includes/core.php
+
+      - name: Verify authenticated upload locally
+        run: |
+          set -euo pipefail
+          if ! php -m | grep -qi '^pdo_sqlite$'; then
+            sudo apt-get update -y
+            sudo apt-get install -y php-sqlite3
+          fi
+          ROOT="$PWD/.deploy/ownerguard_cloud"
+          rm -rf "$ROOT/data"
+          php -r "require '$ROOT/includes/core.php'; og_setup('admin_ci','CI Administrator','AdminPassword-12345!','EscrowPassphrase-123456789!');"
+          php -r '$_SERVER["REDIRECT_HTTP_AUTHORIZATION"]="Bearer redirected-token"; require "'"$ROOT"'/includes/core.php"; if (og_bearer()!=="redirected-token") exit(1);'
+          php -S 127.0.0.1:8099 -t "$ROOT" > .deploy/php-server.log 2>&1 &
+          SERVER_PID=$!
+          cleanup(){ kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$ROOT/data"; }
+          trap cleanup EXIT
+          for attempt in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8099/api/ping.php >/dev/null && break
+            sleep 1
+          done
+          USERNAME="ci_upload_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          curl -fsS -X POST -H 'Accept: application/json' \
+            --data-urlencode "username=${USERNAME}" \
+            http://127.0.0.1:8099/api/mobile_signup.php -o .deploy/local-signup.json
+          TOKEN="$(python3 -c "import json;print(json.load(open('.deploy/local-signup.json'))['token'])")"
+          curl -fsS -H 'Accept: application/json' -H "Authorization: Bearer ${TOKEN}" \
+            http://127.0.0.1:8099/api/escrow_public.php -o .deploy/local-escrow.json
+          KEY_ID="$(python3 -c "import json;print(json.load(open('.deploy/local-escrow.json'))['key_id'])")"
+          printf 'OwnerGuard authenticated upload integration payload' > .deploy/local-object.ogc
+          SHA="$(sha256sum .deploy/local-object.ogc | awk '{print $1}')"
+          NOW="$(date +%s)000"
+          curl -fsS -X PUT -H 'Accept: application/json' \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H 'Content-Type: application/octet-stream' \
+            -H 'X-OwnerGuard-Event: ci_event_001' \
+            -H 'X-OwnerGuard-Name: metadata' \
+            -H 'X-OwnerGuard-Mime: application/json' \
+            -H "X-OwnerGuard-Created: ${NOW}" \
+            -H "X-OwnerGuard-Sha256: ${SHA}" \
+            -H 'X-OwnerGuard-Device: android_ci_probe' \
+            -H 'X-OwnerGuard-Device-Name: GitHub Actions' \
+            -H 'X-OwnerGuard-Crypto-Version: 2' \
+            -H 'X-OwnerGuard-User-Envelope: ci-user-envelope' \
+            -H 'X-OwnerGuard-Admin-Envelope: ci-admin-envelope' \
+            -H "X-OwnerGuard-Admin-Key-Id: ${KEY_ID}" \
+            --data-binary @.deploy/local-object.ogc \
+            http://127.0.0.1:8099/api/upload.php -o .deploy/local-upload.json
+          python3 - <<'PY'
+          import json
+          signup=json.load(open('.deploy/local-signup.json'))
+          escrow=json.load(open('.deploy/local-escrow.json'))
+          upload=json.load(open('.deploy/local-upload.json'))
+          assert signup.get('ok') is True and signup.get('token'), signup
+          assert escrow.get('ok') is True and escrow.get('key_id'), escrow
+          assert upload.get('ok') is True and upload.get('stored') is True, upload
+          PY
+          php -r "require '$ROOT/includes/core.php'; if ((int)og_db()->query('SELECT COUNT(*) FROM objects')->fetchColumn() !== 1) exit(1);"
+
+      - name: Apply complete Android patch stack
+        run: |
+          set -euo pipefail
+          python3 tools/apply_samsung_compat.py
+          python3 tools/apply_cloud_client_compat.py
+          python3 tools/apply_forced_update_gate.py
+          python3 tools/apply_android_drawer_ui.py
+          python3 tools/apply_local_first_drawer_shell.py
+          python3 tools/apply_debug_recording_drawer_fix.py
+          python3 tools/apply_mandatory_requirements_gate.py
+          python3 tools/apply_cloud_console_crash_fix.py
+          python3 tools/apply_native_cloud_workspace.py
+          python3 tools/apply_vertical_cloud_control_center.py
+          python3 tools/apply_credential_event_evidence.py
+          python3 tools/apply_mandatory_owner_face_enrollment.py
+          python3 tools/apply_release_1_0_39.py
+          python3 tools/apply_cloud_automatic_sync.py
+          python3 tools/apply_release_1_0_40.py
+          python3 tools/apply_simple_automatic_vault.py
+          python3 tools/apply_release_1_0_41.py
+          python3 tools/apply_recovery_export_cellular_upload.py
+          python3 tools/apply_release_1_0_42.py
+          python3 tools/apply_upload_pipeline_repair.py
+          python3 tools/apply_release_1_0_43.py
+
+      - name: Verify Android 1.0.43 upload invariants
+        run: |
+          set -euo pipefail
+          grep -q "versionCode 10043" app/build.gradle
+          grep -q "versionName '1.0.43'" app/build.gradle
+          grep -R -q "OwnerGuard-Android/1.0.43" app/src/main/java
+          grep -q 'MIN_SERVER_VERSION = "1.3.27.6"' app/src/main/java/com/fantest/ownerguard/CloudAccountManager.java
+          grep -q "APPEND_OR_REPLACE" app/src/main/java/com/fantest/ownerguard/CloudBackupManager.java
+          grep -q "Binding Cloud account" app/src/main/java/com/fantest/ownerguard/CloudBackupManager.java
+          grep -q "Resuming Cloud upload" app/src/main/java/com/fantest/ownerguard/CloudBackupManager.java
+          grep -q "Uploading now" app/src/main/java/com/fantest/ownerguard/CloudBackupManager.java
+          grep -q "Upload paused — retry scheduled" app/src/main/java/com/fantest/ownerguard/CloudBackupManager.java
+          grep -q "session_rebound" app/src/main/java/com/fantest/ownerguard/CloudBackupEngine.java
+          grep -q "Binding recovery encryption" app/src/main/java/com/fantest/ownerguard/CloudBackupEngine.java
+          grep -q "markUploadingObject" app/src/main/java/com/fantest/ownerguard/CloudBackupEngine.java
+          grep -q "new CloudSyncStatusView(this)" app/src/main/java/com/fantest/ownerguard/MainActivity.java
+          grep -q "postDelayed(this, 1000L)" app/src/main/java/com/fantest/ownerguard/CloudSyncStatusView.java
+          grep -q "NetworkType.CONNECTED" app/src/main/java/com/fantest/ownerguard/CloudBackupManager.java
+          grep -q "NetworkType.UNMETERED" app/src/main/java/com/fantest/ownerguard/CloudBackupManager.java
+
+      - name: Verify protection and security regressions
+        run: |
+          set -euo pipefail
+          grep -q "PIN must contain exactly six digits" app/src/main/java/com/fantest/ownerguard/PinStore.java
+          grep -q "REQUEST_OWNER_FACE = 2042" app/src/main/java/com/fantest/ownerguard/OwnerGuardRequirements.java
+          grep -q "ACTION_FAILED_CREDENTIAL" app/src/main/java/com/fantest/ownerguard/TheftAdminReceiver.java
+          grep -q "ACTION_SUCCESSFUL_CREDENTIAL" app/src/main/java/com/fantest/ownerguard/TheftAdminReceiver.java
+          grep -q "three front-camera photos and a 5-second video" app/src/main/java/com/fantest/ownerguard/ProtectionService.java
+          grep -q "Set battery to Unrestricted" app/src/main/java/com/fantest/ownerguard/MainActivity.java
+          ! grep -q 'sectionTitle("Cloud workspace")' app/src/main/java/com/fantest/ownerguard/MainActivity.java
+          ! grep -q 'sectionTitle("Administration")' app/src/main/java/com/fantest/ownerguard/MainActivity.java
+
+      - name: Build signed APK and AAB
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew clean assembleRelease bundleRelease --stacktrace --no-daemon
+          test -s app/build/outputs/apk/release/app-release.apk
+          test -s app/build/outputs/bundle/release/app-release.aab
+
+      - name: Prepare atomic Cloud and updater deployment
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          APK=.deploy/ownerguard_cloud/releases/OwnerGuard-1.0.43.apk
+          cp app/build/outputs/apk/release/app-release.apk "$APK"
+          cp app/build/outputs/bundle/release/app-release.aab .deploy/OwnerGuard-1.0.43.aab
+          APK_SHA="$(sha256sum "$APK" | awk '{print $1}')"
+          APK_SIZE="$(stat -c '%s' "$APK")"
+          printf '%s' "$APK_SHA" > .deploy/apk.sha256
+          printf '%s' "$APK_SIZE" > .deploy/apk.size
+          python3 - "$APK_SHA" "$APK_SIZE" <<'PY'
+          import json, pathlib, sys
+          sha256, size = sys.argv[1], int(sys.argv[2])
+          root = pathlib.Path('.deploy/ownerguard_cloud')
+          release = {
+              'available': True,
+              'forceUpdate': True,
+              'updatePolicy': 'mandatory',
+              'minimumVersionCode': 10043,
+              'packageName': 'com.fantest.ownerguard',
+              'versionCode': 10043,
+              'versionName': '1.0.43',
+              'sha256': sha256,
+              'size': size,
+              'minSdk': 28,
+              'apkUrl': '/ownerguard_cloud/releases/OwnerGuard-1.0.43.apk',
+              'releaseNotes': 'Cloud upload pipeline repair. Apache now forwards bearer authorization reliably to PHP, the app automatically rebinds saved sessions, stale WorkManager chains no longer block reconciliation, and Dashboard/Local setup display live Binding, Pending, Uploading, Waiting for Wi-Fi, Resuming, Synced, and Error states.'
+          }
+          (root/'releases'/'release.json').write_text(json.dumps(release, indent=2)+'\n', encoding='utf-8')
+          deploy = {
+              'project':'ownerguard_cloud','slug':'ownerguard_cloud','host':'ki',
+              'mode':'merge','strategy':'merge','preserve':['data']
+          }
+          (root/'deploy.json').write_text(json.dumps(deploy, indent=2)+'\n', encoding='utf-8')
+          PY
+          cd .deploy/ownerguard_cloud
+          zip -q -r ../OwnerGuard-1.0.43-Upload-Pipeline-Repair-Deployment.zip .
+          cd ../..
+
+      - name: Deploy Cloud 1.3.27.7 and mandatory APK
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          PACKAGE=.deploy/OwnerGuard-1.0.43-Upload-Pipeline-Repair-Deployment.zip
+          deployed=0
+          for endpoint in \
+            "https://ki.fantest.win/universal_deployer.php?action=deploy" \
+            "https://ki.fantest.win/ud.php?action=deploy"; do
+            if curl -f -sS -L --connect-timeout 30 --max-time 300 \
+              -H "Accept: application/json" \
+              -H "X-Termux-Deployer: universal-deployer-v3" \
+              -F "file=@${PACKAGE}" -F "zip=@${PACKAGE}" -F "archive=@${PACKAGE}" \
+              -F "slug=ownerguard_cloud" -F "project=ownerguard_cloud" -F "host=ki" \
+              -F "mode=merge" -F "strategy=merge" \
+              -F "source=github_actions_ownerguard_1_0_43_upload_repair" \
+              "${endpoint}" | tee .deploy/deploy-response.txt; then
+              deployed=1
+              break
+            fi
+          done
+          test "$deployed" -eq 1
+
+      - name: Verify live bearer forwarding and APK bytes
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          EXPECTED_SHA="$(cat .deploy/apk.sha256)"
+          EXPECTED_SIZE="$(cat .deploy/apk.size)"
+          verified=0
+          for attempt in $(seq 1 15); do
+            Q="verify=${GITHUB_RUN_ID}-${attempt}"
+            if curl -fsS -L -H 'Cache-Control: no-cache' \
+              "https://ki.fantest.win/ownerguard_cloud/api/ping.php?${Q}" -o .deploy/live-ping.json \
+              && curl -fsS -L -H 'Cache-Control: no-cache' \
+              "https://ki.fantest.win/ownerguard_cloud/releases/release.json?${Q}" -o .deploy/live-release.json; then
+              AUTH_CODE="$(curl -sS -L -o .deploy/live-auth-probe.json -w '%{http_code}' \
+                -H 'Accept: application/json' -H 'Cache-Control: no-cache' \
+                -H 'Authorization: Bearer ownerguard-invalid-header-probe' \
+                "https://ki.fantest.win/ownerguard_cloud/api/mobile_me.php?${Q}")"
+              if EXPECTED_SHA="$EXPECTED_SHA" EXPECTED_SIZE="$EXPECTED_SIZE" AUTH_CODE="$AUTH_CODE" python3 - <<'PY'
+          import json, os
+          ping=json.load(open('.deploy/live-ping.json'))
+          release=json.load(open('.deploy/live-release.json'))
+          probe=json.load(open('.deploy/live-auth-probe.json'))
+          assert ping.get('ok') is True and ping.get('version') == '1.3.27.6', ping
+          assert ping.get('crypto_ready') is True, ping
+          assert release.get('versionCode') == 10043 and release.get('versionName') == '1.0.43', release
+          assert release.get('sha256') == os.environ['EXPECTED_SHA'], release
+          assert int(release.get('size',-1)) == int(os.environ['EXPECTED_SIZE']), release
+          assert os.environ['AUTH_CODE'] == '401', os.environ['AUTH_CODE']
+          assert probe.get('error') == 'Invalid or disabled API session', probe
+          PY
+              then
+                if curl -fsS -L -H 'Cache-Control: no-cache' \
+                  "https://ki.fantest.win/ownerguard_cloud/releases/OwnerGuard-1.0.43.apk?${Q}" \
+                  -o .deploy/live-OwnerGuard-1.0.43.apk; then
+                  LIVE_SHA="$(sha256sum .deploy/live-OwnerGuard-1.0.43.apk | awk '{print $1}')"
+                  LIVE_SIZE="$(stat -c '%s' .deploy/live-OwnerGuard-1.0.43.apk)"
+                  if [ "$LIVE_SHA" = "$EXPECTED_SHA" ] && [ "$LIVE_SIZE" = "$EXPECTED_SIZE" ]; then
+                    verified=1
+                    break
+                  fi
+                fi
+              fi
+            fi
+            sleep 5
+          done
+          test "$verified" -eq 1
+
+      - name: Upload release artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: OwnerGuard-1.0.43-Upload-Pipeline-Repair-Production
+          path: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/bundle/release/app-release.aab
+            .deploy/OwnerGuard-1.0.43-Upload-Pipeline-Repair-Deployment.zip
+            .deploy/apk.sha256
+            .deploy/apk.size
+            .deploy/deploy-response.txt
+            .deploy/live-ping.json
+            .deploy/live-release.json
+            .deploy/live-auth-probe.json
+            .deploy/local-signup.json
+            .deploy/local-escrow.json
+            .deploy/local-upload.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Mark production release successful
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -d "{\"state\":\"success\",\"context\":\"ownerguard/1.0.43-release\",\"description\":\"Cloud upload pipeline verified live\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"
+
+      - name: Mark production release failed
+        if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/statuses/${GITHUB_SHA}" \
+            -d "{\"state\":\"failure\",\"context\":\"ownerguard/1.0.43-release\",\"description\":\"OwnerGuard upload repair failed\",\"target_url\":\"https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}"

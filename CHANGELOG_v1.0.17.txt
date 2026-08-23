@@ -1,0 +1,8 @@
+OwnerGuard v1.0.17
+- End-to-end encrypted append-only cloud backup for master_pc
+- Automatic upload after every captured incident
+- Backup all existing incidents
+- Wi-Fi-only option and retry-by-rescan behavior
+- 256-bit cloud recovery key encrypted locally by Android Keystore
+- Server receives only OGC1 AES-256-GCM ciphertext
+- No media delete API in cloud dashboard

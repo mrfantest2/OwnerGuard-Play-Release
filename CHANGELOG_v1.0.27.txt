@@ -1,0 +1,12 @@
+OwnerGuard v1.0.27
+
+Incident vault filtering and visual triage:
+- Added date filters: All, Today, Yesterday, Last 7 days, Last 30 days.
+- Added incident-type filters: Failed credential, Visible test, Owner check, Other.
+- Added owner-confidence filters: Likely owner, Not owner, Unscored.
+- Added one-tap Clear filters action.
+- Added filtered count, such as “4 incidents of 19”.
+- Highlighted incident type with colored badges.
+- Highlighted failed-attempt counts.
+- Highlighted owner classification and confidence percentage.
+- Preserved encrypted evidence, package ID, update compatibility, signing key, and vault storage.

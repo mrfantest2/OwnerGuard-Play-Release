@@ -1,0 +1,7 @@
+OwnerGuard v1.0.19 build correction
+
+Fixed MainActivity.java cloud-account dialog message:
+- replaced an invalid raw multiline Java string with escaped newline sequences
+- preserved package ID com.fantest.ownerguard
+- preserved versionCode 10019 and versionName 1.0.19
+- preserved the existing signing/ownerguard-release.jks key

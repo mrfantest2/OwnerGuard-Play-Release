@@ -1,0 +1,9 @@
+OwnerGuard v1.0.19
+
+- Improved owner selfie recognition using multiple normalized face crops, mirrored comparisons, and agreement across enrolled angles.
+- Better compatibility with older front cameras and lower-resolution previews.
+- Selectable app-lock timeout: Instant, 1 minute, 3 minutes, 5 minutes, or 10 minutes.
+- Default timeout for upgraded installations is 1 minute.
+- Added OwnerGuard Cloud account sign-up and login inside the Android app.
+- New app-created cloud accounts remain pending until an administrator approves them.
+- Preserved exact 6-digit local PIN, biometric unlock, encrypted vault, stable package ID, and stable signing key.

@@ -1,0 +1,8 @@
+OwnerGuard v1.0.22
+
+- Compact vault timeline grouped by actual incident date.
+- Deterministic newest/oldest sorting using metadata startedAt.
+- Three-frame owner selfie verification.
+- Orientation-tolerant face matching for older/front cameras.
+- Robust aligned pixel, gradient, block, and local-pattern scoring.
+- Dynamic threshold calibrated from the five enrolled owner samples.

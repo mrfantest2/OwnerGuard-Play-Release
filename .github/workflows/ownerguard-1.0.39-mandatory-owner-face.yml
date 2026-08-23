@@ -1,0 +1,16 @@
+name: OwnerGuard 1.0.39 Superseded
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  superseded:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report superseded release
+        run: |
+          echo "OwnerGuard 1.0.39 is superseded by the 1.0.40 automatic Cloud synchronization workflow."
+          echo "This workflow no longer builds, deploys, or publishes an updater."

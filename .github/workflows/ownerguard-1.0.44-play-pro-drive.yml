@@ -1,0 +1,458 @@
+name: OwnerGuard 1.0.44 GitHub Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish validated v1.0.44 to Google Play production
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches:
+      - release/1.0.44-play-pro-drive
+  pull_request:
+    branches:
+      - release/1.0.44-play-pro-drive
+
+permissions:
+  contents: read
+  statuses: write
+
+concurrency:
+  group: ownerguard-1-0-44-${{ github.ref }}
+  cancel-in-progress: ${{ !(github.event_name == 'push' && contains(github.event.head_commit.message, '[play-production]')) }}
+
+env:
+  JAVA_VERSION: "17"
+  PACKAGE_NAME: com.fantest.ownerguard
+  VERSION_CODE: "10044"
+  VERSION_NAME: "1.0.44"
+
+jobs:
+  qa:
+    name: Source, security, test, lint and build QA
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Mark QA pending
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tools/post_github_status.py ownerguard/1.0.44-qa pending 'GitHub-hosted QA running'
+
+      - name: Configure Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Verify GitHub-only runner and release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${RUNNER_OS}" = "Linux"
+          test "${GITHUB_REF}" = "refs/heads/release/1.0.44-play-pro-drive" || test "${GITHUB_EVENT_NAME}" = "workflow_dispatch" || test "${GITHUB_EVENT_NAME}" = "pull_request"
+          printf 'source_commit=%s\n' "${GITHUB_SHA}" | tee source-commit.txt
+          if grep -R -n -E 'runs-on:[[:space:]]*self-hosted|MASTER-PC|KDT Control|MasterForge|DeckForge|Steam Deck|OnePlus 7|Samsung A73' .github/workflows --include='*.yml' --include='*.yaml'; then
+            echo 'A forbidden local/device release dependency remains in active workflows.' >&2
+            exit 1
+          fi
+
+      - name: Reject tracked credentials and obvious secret material
+        shell: bash
+        run: |
+          set -euo pipefail
+          credential_paths="$(git ls-files | grep -E '(^|/)(keystore\.properties|[^/]+\.(jks|keystore|p12|pem|key)|service-account[^/]*\.json|play-service-account[^/]*\.json)$' || true)"
+          if [ -n "${credential_paths}" ]; then
+            echo 'Credential-like files are tracked in Git:' >&2
+            printf '%s\n' "${credential_paths}" >&2
+            exit 1
+          fi
+          if git grep -n -I -E -- '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|"private_key"[[:space:]]*:' -- . ':!docs/**'; then
+            echo 'Private-key material pattern detected in tracked source.' >&2
+            exit 1
+          fi
+          if git grep -n -I -E -- '(^|[^A-Za-z])(storePassword|keyPassword)[[:space:]]*=[[:space:]]*[^$[:space:]]' -- . ':!docs/**'; then
+            echo 'Hard-coded signing password assignment detected.' >&2
+            exit 1
+          fi
+
+      - name: Run release-contract unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools/tests -p 'test_*.py' -v
+
+      - name: Reconstruct canonical Android lineage through 1.0.44
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/prepare_release_1_0_44.py
+
+      - name: Validate dependency graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          mkdir -p qa-evidence
+          ./gradlew :app:dependencies --configuration releaseRuntimeClasspath --no-daemon > qa-evidence/release-runtime-dependencies.txt
+          grep -q 'com.android.billingclient:billing:9.1.0' qa-evidence/release-runtime-dependencies.txt
+          grep -q 'androidx.work:work-runtime:2.10.3' qa-evidence/release-runtime-dependencies.txt
+
+      - name: Run Android unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew testDebugUnitTest --stacktrace --no-daemon
+
+      - name: Run Android lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew lintRelease --stacktrace --no-daemon
+
+      - name: Build debug and unsigned release variants
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew assembleDebug assembleRelease bundleRelease --stacktrace --no-daemon
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -size +0c -print -quit | grep -q .
+          test -s app/build/outputs/bundle/release/app-release.aab
+
+      - name: Collect QA evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p qa-evidence/reports qa-evidence/outputs
+          cp source-commit.txt qa-evidence/source-commit.txt 2>/dev/null || true
+          cp -R app/build/reports/. qa-evidence/reports/ 2>/dev/null || true
+          cp app/build/outputs/apk/debug/app-debug.apk qa-evidence/outputs/OwnerGuard-1.0.44-debug.apk 2>/dev/null || true
+          cp app/build/outputs/bundle/release/app-release.aab qa-evidence/outputs/OwnerGuard-1.0.44-unsigned-ci.aab 2>/dev/null || true
+          printf '%s\n' \
+            "Repository: ${GITHUB_REPOSITORY}" \
+            "Branch: ${GITHUB_REF_NAME}" \
+            "Commit: ${GITHUB_SHA}" \
+            "Package: ${PACKAGE_NAME}" \
+            "Version: ${VERSION_NAME} (${VERSION_CODE})" > qa-evidence/QA-SUMMARY.txt
+
+      - name: Upload build and test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OwnerGuard-1.0.44-QA-${{ github.run_id }}-${{ github.run_attempt }}
+          path: qa-evidence/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Mark QA result
+        if: always()
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          state=failure
+          description='GitHub-hosted QA failed'
+          if [ "${JOB_STATUS}" = success ]; then state=success; description='GitHub-hosted QA passed'; fi
+          if [ "${JOB_STATUS}" = cancelled ]; then state=error; description='GitHub-hosted QA cancelled'; fi
+          python3 tools/post_github_status.py ownerguard/1.0.44-qa "${state}" "${description}"
+
+  emulator-qa:
+    name: Android 16 emulator smoke QA
+    needs: qa
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@v6
+
+      - name: Mark emulator QA pending
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tools/post_github_status.py ownerguard/1.0.44-emulator pending 'Android 16 emulator QA running'
+
+      - name: Configure Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Reconstruct and build debug app
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/prepare_release_1_0_44.py
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace --no-daemon
+          test -s app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Install Android 16 emulator image
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager 'platform-tools' 'emulator' 'platforms;android-36' 'system-images;android-36;google_apis;x86_64'
+          echo no | avdmanager create avd --force --name ownerguard_api36 --package 'system-images;android-36;google_apis;x86_64' --device 'pixel_6'
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+
+      - name: Launch emulator and smoke test OwnerGuard
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p emulator-evidence
+          "${ANDROID_HOME}/emulator/emulator" -avd ownerguard_api36 -no-window -noaudio -no-boot-anim -gpu swiftshader_indirect -camera-front emulated -camera-back none -wipe-data > emulator-evidence/emulator-console.log 2>&1 &
+          EMULATOR_PID=$!
+          cleanup(){ kill "${EMULATOR_PID}" 2>/dev/null || true; }
+          trap cleanup EXIT
+          adb wait-for-device
+          booted=0
+          for attempt in $(seq 1 180); do
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then booted=1; break; fi
+            sleep 2
+          done
+          test "${booted}" -eq 1
+          adb shell input keyevent 82 || true
+          adb install -r app/build/outputs/apk/debug/app-debug.apk | tee emulator-evidence/install.txt
+          adb logcat -c
+          adb shell am start -W -n com.fantest.ownerguard/.MainActivity | tee emulator-evidence/launch.txt
+          sleep 12
+          adb shell pidof com.fantest.ownerguard | tee emulator-evidence/process.txt
+          test -s emulator-evidence/process.txt
+          adb shell dumpsys activity top > emulator-evidence/activity-top.txt
+          adb logcat -d -v threadtime > emulator-evidence/logcat.txt
+          if grep -E 'Process: com\.fantest\.ownerguard.*PID:|Fatal signal [0-9]+.*com\.fantest\.ownerguard' emulator-evidence/logcat.txt; then
+            echo 'OwnerGuard fatal crash detected during emulator smoke test.' >&2
+            exit 1
+          fi
+          if grep -A 20 -B 3 'FATAL EXCEPTION' emulator-evidence/logcat.txt | grep -q 'com\.fantest\.ownerguard'; then
+            echo 'OwnerGuard Java fatal exception detected during emulator smoke test.' >&2
+            exit 1
+          fi
+          printf '%s\n' \
+            'Android emulator QA: PASS' \
+            'API: 36' \
+            "Package: ${PACKAGE_NAME}" \
+            "Commit: ${GITHUB_SHA}" > emulator-evidence/EMULATOR-QA.txt
+
+      - name: Upload emulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OwnerGuard-1.0.44-Emulator-QA-${{ github.run_id }}-${{ github.run_attempt }}
+          path: emulator-evidence/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Mark emulator QA result
+        if: always()
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          state=failure
+          description='Android 16 emulator QA failed'
+          if [ "${JOB_STATUS}" = success ]; then state=success; description='Android 16 emulator QA passed'; fi
+          if [ "${JOB_STATUS}" = cancelled ]; then state=error; description='Android 16 emulator QA cancelled'; fi
+          python3 tools/post_github_status.py ownerguard/1.0.44-emulator "${state}" "${description}"
+
+  production:
+    name: Signed AAB and Google Play production
+    needs:
+      - qa
+      - emulator-qa
+    if: >-
+      (github.event_name == 'push' && contains(github.event.head_commit.message, '[play-production]')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish == true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: google-play-production
+    env:
+      OWNERGUARD_UPLOAD_KEYSTORE_B64: ${{ secrets.OWNERGUARD_UPLOAD_KEYSTORE_B64 }}
+      OWNERGUARD_KEYSTORE_PASSWORD: ${{ secrets.OWNERGUARD_KEYSTORE_PASSWORD }}
+      OWNERGUARD_KEY_ALIAS: ${{ secrets.OWNERGUARD_KEY_ALIAS }}
+      OWNERGUARD_KEY_PASSWORD: ${{ secrets.OWNERGUARD_KEY_PASSWORD }}
+      GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+      EXPECTED_UPLOAD_CERT_SHA256: ${{ vars.OWNERGUARD_EXPECTED_UPLOAD_CERT_SHA256 }}
+      OWNERGUARD_PRO_PRICE_MICROS: ${{ vars.OWNERGUARD_PRO_PRICE_MICROS }}
+      OWNERGUARD_PRO_CURRENCY: ${{ vars.OWNERGUARD_PRO_CURRENCY }}
+
+    steps:
+      - name: Checkout exact validated source commit
+        uses: actions/checkout@v6
+
+      - name: Mark production pending
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 tools/post_github_status.py ownerguard/1.0.44-production pending 'Signed build and Play production running'
+
+      - name: Configure Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Reconstruct validated release source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/prepare_release_1_0_44.py
+
+      - name: Validate protected production secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${OWNERGUARD_UPLOAD_KEYSTORE_B64:-}" ] || missing+=(OWNERGUARD_UPLOAD_KEYSTORE_B64)
+          [ -n "${OWNERGUARD_KEYSTORE_PASSWORD:-}" ] || missing+=(OWNERGUARD_KEYSTORE_PASSWORD)
+          [ -n "${OWNERGUARD_KEY_ALIAS:-}" ] || missing+=(OWNERGUARD_KEY_ALIAS)
+          [ -n "${OWNERGUARD_KEY_PASSWORD:-}" ] || missing+=(OWNERGUARD_KEY_PASSWORD)
+          [ -n "${GOOGLE_PLAY_SERVICE_ACCOUNT_JSON:-}" ] || missing+=(GOOGLE_PLAY_SERVICE_ACCOUNT_JSON)
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf 'Missing protected GitHub Environment secret(s): %s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+          echo 'All required protected secret names are populated.'
+
+      - name: Materialize ephemeral upload signing files
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p signing
+          printf '%s' "${OWNERGUARD_UPLOAD_KEYSTORE_B64}" | base64 --decode > signing/ownerguard-release.jks
+          test -s signing/ownerguard-release.jks
+          cat > signing/keystore.properties <<EOF
+          storeFile=signing/ownerguard-release.jks
+          storePassword=${OWNERGUARD_KEYSTORE_PASSWORD}
+          keyAlias=${OWNERGUARD_KEY_ALIAS}
+          keyPassword=${OWNERGUARD_KEY_PASSWORD}
+          EOF
+          chmod 600 signing/ownerguard-release.jks signing/keystore.properties
+
+      - name: Build signed production APK and AAB
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew clean assembleRelease bundleRelease --stacktrace --no-daemon
+          test -s app/build/outputs/apk/release/app-release.apk
+          test -s app/build/outputs/bundle/release/app-release.aab
+
+      - name: Verify package, version, signatures and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-evidence
+          APK=app/build/outputs/apk/release/app-release.apk
+          AAB=app/build/outputs/bundle/release/app-release.aab
+          BUILD_TOOLS="$(ls -1 "${ANDROID_HOME}/build-tools" | sort -V | tail -1)"
+          AAPT="${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/aapt"
+          APKSIGNER="${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/apksigner"
+          "${AAPT}" dump badging "${APK}" | tee release-evidence/apk-badging.txt
+          grep -q "package: name='${PACKAGE_NAME}' versionCode='${VERSION_CODE}' versionName='${VERSION_NAME}'" release-evidence/apk-badging.txt
+          "${APKSIGNER}" verify --verbose --print-certs "${APK}" | tee release-evidence/apk-signature.txt
+          jarsigner -verify -verbose -certs "${AAB}" > release-evidence/aab-signature.txt
+          grep -q 'jar verified.' release-evidence/aab-signature.txt
+          CERT_SHA256="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' release-evidence/apk-signature.txt | head -1 | tr '[:lower:]' '[:upper:]' | tr -d ':')"
+          test -n "${CERT_SHA256}"
+          if [ -n "${EXPECTED_UPLOAD_CERT_SHA256:-}" ]; then
+            EXPECTED="$(printf '%s' "${EXPECTED_UPLOAD_CERT_SHA256}" | tr '[:lower:]' '[:upper:]' | tr -d ':[:space:]')"
+            test "${CERT_SHA256}" = "${EXPECTED}" || { echo 'Upload signing certificate fingerprint does not match protected expected fingerprint.' >&2; exit 1; }
+          fi
+          cp "${APK}" release-evidence/OwnerGuard-1.0.44-Play-Pro.apk
+          cp "${AAB}" release-evidence/OwnerGuard-1.0.44-Play-Pro.aab
+          sha256sum release-evidence/OwnerGuard-1.0.44-Play-Pro.apk release-evidence/OwnerGuard-1.0.44-Play-Pro.aab | tee release-evidence/SHA256SUMS.txt
+          printf '%s\n' \
+            "Repository: ${GITHUB_REPOSITORY}" \
+            "Commit: ${GITHUB_SHA}" \
+            "Package: ${PACKAGE_NAME}" \
+            "VersionCode: ${VERSION_CODE}" \
+            "VersionName: ${VERSION_NAME}" \
+            'TargetSdk: 36' \
+            'Billing: 9.1.0' \
+            'Product: ownerguard_pro_lifetime' \
+            "Upload certificate SHA-256: ${CERT_SHA256}" > release-evidence/RELEASE-SUMMARY.txt
+
+      - name: Configure Google Play Publisher dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check 'google-auth>=2,<3' 'requests>=2,<3'
+          python3 -m pip check
+
+      - name: Submit OwnerGuard 1.0.44 to Google Play production
+        id: play
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --aab release-evidence/OwnerGuard-1.0.44-Play-Pro.aab
+            --track production
+            --release-status completed
+            --release-name 'OwnerGuard 1.0.44 Pro Drive'
+            --ensure-product
+          )
+          if [ -n "${OWNERGUARD_PRO_PRICE_MICROS:-}" ]; then args+=(--price-micros "${OWNERGUARD_PRO_PRICE_MICROS}"); fi
+          if [ -n "${OWNERGUARD_PRO_CURRENCY:-}" ]; then args+=(--currency "${OWNERGUARD_PRO_CURRENCY}"); fi
+          set +e
+          python3 tools/play_publish_1_0_44.py "${args[@]}" > release-evidence/play-publish.json 2> release-evidence/play-publish-error.txt
+          status=$?
+          set -e
+          if [ -s release-evidence/play-publish.json ]; then cat release-evidence/play-publish.json; fi
+          if [ "${status}" -ne 0 ]; then
+            cat release-evidence/play-publish-error.txt >&2
+            exit "${status}"
+          fi
+
+      - name: Upload signed release and Play evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OwnerGuard-1.0.44-Production-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-evidence/
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Mark production result
+        if: always()
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          state=failure
+          description='Signed build or Play production failed'
+          if [ "${JOB_STATUS}" = success ]; then state=success; description='Play production submission verified'; fi
+          if [ "${JOB_STATUS}" = cancelled ]; then state=error; description='Play production job cancelled'; fi
+          python3 tools/post_github_status.py ownerguard/1.0.44-production "${state}" "${description}"

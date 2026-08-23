@@ -1,0 +1,9 @@
+OwnerGuard v1.0.9
+- Fixed dashboard buttons being glued together
+- Added separated modern UI cards and consistent button spacing
+- Rebuilt owner enrollment as automatic live front-camera face detection
+- Added animated face oval and scanning line
+- Added automatic stable-face countdown and capture
+- Added five-angle pose guidance and opposite-angle validation
+- Added ready, accepted, retry, and completion tones
+- Retained encrypted three-photo plus five-second video capture

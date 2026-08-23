@@ -1,0 +1,14 @@
+<resources>
+    <color name="black">#000000</color>
+    <color name="white">#FFFFFF</color>
+    <color name="og_bg">#0A1220</color>
+    <color name="og_surface">#14213D</color>
+    <color name="og_surface_alt">#1C2A48</color>
+    <color name="og_primary">#30C5FF</color>
+    <color name="og_primary_dark">#0EA5E9</color>
+    <color name="og_text">#F8FAFC</color>
+    <color name="og_text_muted">#B8C5D6</color>
+    <color name="og_success">#10B981</color>
+    <color name="og_warning">#F59E0B</color>
+    <color name="og_danger">#EF4444</color>
+</resources>

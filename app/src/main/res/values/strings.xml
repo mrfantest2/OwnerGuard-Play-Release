@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">OwnerGuard</string>
+    <string name="device_admin_description">Detects failed device credential attempts, including pattern, PIN, and password, for owner-protection events.</string>
+</resources>

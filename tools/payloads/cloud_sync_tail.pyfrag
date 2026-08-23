@@ -1,0 +1,146 @@
+ocal vault and device setup"));
+        page.addView(labelCard("Complete these device steps first. Cloud registration is optional for local protection, incident capture, and the encrypted phone vault."),topMargin(10));
+        page.addView(button("Review mandatory permissions and battery access",v->showRequirementsStatus()),topMargin(10));
+        page.addView(button("Enable pattern / PIN / password monitoring",v->enableAdmin()),topMargin(10));
+        page.addView(button(FaceSimilarity.isEnrolled(this)?"Replace owner-face enrollment":"Start owner-face enrollment",v->startGuidedEnrollment()),topMargin(10));
+        page.addView(button("Test owner selfie recognition",v->startSelfieTest()),topMargin(10));
+        page.addView(secondaryButton("Clear owner-face enrollment",v->{FaceSimilarity.clear(this);Toast.makeText(this,"Owner face enrollment cleared — setup is now required",Toast.LENGTH_LONG).show();showRequirementsGate();}),topMargin(10));
+        page.addView(secondaryButton("Run vault encryption self-test",v->runVaultSelfTest()),topMargin(10));
+
+        page.addView(sectionTitle("App lock"),topMargin(22));
+        page.addView(labelCard("Choose when OwnerGuard locks after you leave the app. The vault still locks immediately when you tap Lock now or after the selected timeout expires."),topMargin(10));
+        page.addView(button("Lock after leaving: "+AuthSession.timeoutLabel(this),v->showLockTimeoutChooser()),topMargin(10));
+        page.addView(secondaryButton("Lock OwnerGuard now",v->{AuthSession.lock();buildPinScreen();}),topMargin(10));
+
+        boolean cloudSignedIn=CloudAccountManager.loggedIn(this);
+        boolean cloudAdministrator=cloudSignedIn&&"admin".equalsIgnoreCase(CloudAccountManager.role(this));
+        page.addView(sectionTitle("Cloud Vault account"),topMargin(22));
+        page.addView(labelCard("Cloud Vault is optional. When linked, all pending incidents synchronize automatically whenever Wi-Fi is available. No mobile-data upload is permitted."),topMargin(10));
+        page.addView(infoCard("Cloud account",CloudAccountManager.status(this)),topMargin(10));
+        if(!cloudSignedIn){
+            page.addView(button("Create cloud account or log in",v->openCloudAccountChoice(null)),topMargin(10));
+            page.addView(secondaryButton("Use local vault only",v->Toast.makeText(this,"Local encrypted vault remains active",Toast.LENGTH_SHORT).show()),topMargin(10));
+        }else{
+            page.addView(labelCard(CloudBackupManager.statusSummary(this)),topMargin(10));
+            page.addView(secondaryButton("Sign out of Cloud Vault",v->{CloudAccountManager.logout(this);Toast.makeText(this,"Cloud account signed out. Local evidence remains encrypted on this phone.",Toast.LENGTH_LONG).show();showVaultTab();}),topMargin(10));
+
+            page.addView(sectionTitle("Encrypted Cloud backup"),topMargin(22));
+            page.addView(labelCard("Automatic policy: every pending incident is dual-envelope encrypted and synchronized on Wi-Fi. Administrator recovery is included by policy and every recovery action is authenticated and audited. No plaintext is stored by OwnerGuard Cloud."),topMargin(10));
+            page.addView(secondaryButton("Show / copy cloud recovery key",v->showCloudRecoveryKey()),topMargin(10));
+            page.addView(secondaryButton("Import cloud recovery key",v->showImportCloudKey()),topMargin(10));
+            page.addView(labelCard("Keep the personal recovery key offline. Upload, retained-incident migration, retries, and synchronization are automatic."),topMargin(10));
+            appendCloudWorkspaceControlCenter(page,cloudAdministrator);
+        }
+
+        page.addView(sectionTitle("Secure app updates"),topMargin(22));
+        page.addView(labelCard("OwnerGuard accepts only a newer APK with the same package ID, exact byte count, matching SHA-256, and the installed signing certificate. Android always shows the final update confirmation."),topMargin(10));
+        page.addView(labelCard(AppUpdateManager.statusSummary(this)),topMargin(10));
+        page.addView(button("Check for signed OwnerGuard update",v->AppUpdateManager.check(this,true)),topMargin(10));
+        setPage(page);
+    }
+'''
+main = replace_method(main, "    private void showVaultTab(){", new_vault)
+
+# Replace the old combined login/signup dialog with the dedicated activity.
+main = replace_method(main, "    private void showCloudAccountDialog(){", r'''    private void showCloudAccountDialog(){
+        openCloudAccountChoice(null);
+    }
+''')
+
+helpers = r'''    private void openCloudAccountChoice(String mode){
+        OwnerGuardApp.markInternalTransition();
+        Intent intent=new Intent(this,CloudAuthActivity.class);
+        if(mode!=null)intent.putExtra(CloudAuthActivity.EXTRA_MODE,mode);
+        startActivityForResult(intent,CloudAuthActivity.REQUEST_CODE);
+    }
+
+    private void maybeOfferCloudAccount(){
+        if(CloudAccountManager.hasStoredSession(this))return;
+        android.content.SharedPreferences onboarding=getSharedPreferences("owner_guard_onboarding",MODE_PRIVATE);
+        if(onboarding.getBoolean("cloud_account_choice_shown",false))return;
+        onboarding.edit().putBoolean("cloud_account_choice_shown",true).apply();
+        new AlertDialog.Builder(this)
+                .setTitle("Set up optional Cloud Vault")
+                .setMessage("Create a new account or sign in to synchronize encrypted incidents automatically on Wi-Fi. Local protection works without registration.")
+                .setPositiveButton("Sign up",(d,w)->openCloudAccountChoice(CloudAuthActivity.MODE_SIGN_UP))
+                .setNegativeButton("Log in",(d,w)->openCloudAccountChoice(CloudAuthActivity.MODE_LOGIN))
+                .setNeutralButton("Use local only",null)
+                .show();
+    }
+
+'''
+main = replace_once(main,
+    "    private void showLockTimeoutChooser(){\n",
+    helpers + "    private void showLockTimeoutChooser(){\n",
+    "Cloud auth helper insertion")
+
+# Trigger the first-use choice only after the real dashboard and tabContent exist.
+main = replace_once(main,
+    "        AppUpdateManager.check(this,false);\n        if(openVaultAfterUnlock){\n",
+    "        AppUpdateManager.check(this,false);\n        if(tabContent!=null)tabContent.postDelayed(this::maybeOfferCloudAccount,650L);\n        if(openVaultAfterUnlock){\n",
+    "dashboard first-use cloud choice")
+
+# Handle successful account creation/login immediately.
+activity_signature = "    @Override protected void onActivityResult(int r,int c,Intent d){"
+start = main.find(activity_signature)
+if start < 0:
+    raise SystemExit("MainActivity onActivityResult missing for Cloud auth")
+brace = main.find("{", start)
+main = main[:brace + 1] + r'''
+        if(r==CloudAuthActivity.REQUEST_CODE){
+            if(c==RESULT_OK){
+                CloudBackupManager.applyAccountPolicy(this);
+                Toast.makeText(this,"Cloud Vault linked — automatic Wi-Fi synchronization active",Toast.LENGTH_LONG).show();
+                showVaultTab();
+            }
+            return;
+        }
+''' + main[brace + 1:]
+MAIN.write_text(main, encoding="utf-8")
+
+manifest = MANIFEST.read_text(encoding="utf-8")
+manifest = replace_once(manifest,
+    '        <activity android:name=".CloudConsoleActivity" android:exported="false" />\n',
+    '        <activity android:name=".CloudAuthActivity" android:exported="false" android:screenOrientation="portrait" />\n'
+    '        <activity android:name=".CloudConsoleActivity" android:exported="false" />\n',
+    "CloudAuthActivity manifest entry")
+MANIFEST.write_text(manifest, encoding="utf-8")
+
+combined = "\n".join(path.read_text(encoding="utf-8") for path in (
+    JAVA / "CloudAccountManager.java",
+    JAVA / "CloudBackupManager.java",
+    JAVA / "CloudBackupWorker.java",
+    JAVA / "CloudBackupEngine.java",
+    JAVA / "CloudAuthActivity.java",
+    JAVA / "OwnerGuardApp.java",
+    MAIN,
+    MANIFEST,
+))
+for required in (
+    "CloudBackupWorker",
+    "NetworkType.UNMETERED",
+    "TRANSPORT_WIFI",
+    "Automatic Wi-Fi backup is active",
+    "Create cloud account or log in",
+    "Administrator recovery envelope: Included automatically",
+    "cloud_migration_required",
+    "CloudAuthActivity.REQUEST_CODE",
+    "CloudBackupManager.onAppForeground(this)",
+    "MIN_SERVER_VERSION = \"1.3.27.3\"",
+):
+    if required not in combined:
+        raise SystemExit("Automatic Cloud sync output incomplete: " + required)
+
+for forbidden in (
+    "Open OwnerGuard and approve Administrator recovery before cloud backup can continue",
+    'check("Automatically back up every new incident"',
+    'CheckBox adminRecovery',
+    'CheckBox wifiOnly',
+    '"Back up all existing incidents"',
+    '"Migrate retained incidents for Administrator recovery"',
+    'EditText display=secretField("Display name',
+):
+    if forbidden in combined:
+        raise SystemExit("Manual Cloud control remains after automatic policy patch: " + forbidden)
+
+print("Applied separate Cloud authentication and automatic Wi-Fi-only vault synchronization")

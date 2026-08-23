@@ -1,0 +1,6 @@
+OwnerGuard v1.0.16
+- True immediate authentication invalidation when leaving OwnerGuard
+- Explicitly preserves only OwnerGuard-to-OwnerGuard internal transitions
+- Locks on Home, Recents, screen off, sharing, external players, Settings, and other apps
+- Sensitive screens continue to require authentication when resumed
+- Exact 6-digit PIN and biometric unlock retained

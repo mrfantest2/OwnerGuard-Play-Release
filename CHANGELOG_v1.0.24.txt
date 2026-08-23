@@ -1,0 +1,12 @@
+OwnerGuard v1.0.25 — Updater Reliability
+
+- Daily network-constrained signed update checks using Android WorkManager.
+- Update-available notification without interrupting evidence capture.
+- Persistent verified APK state across app lock and settings screens.
+- Automatic installer resume after “Install unknown apps” permission is granted.
+- Atomic .download to verified .apk finalization and stale-partial cleanup.
+- Download progress, exact byte-count verification, SHA-256, package/version, and certificate checks.
+- Pending APK is re-verified immediately before every installer launch.
+- Post-update migration status and private update diagnostics log.
+- User-Agent updated to OwnerGuard-Android/1.0.26.
+- Package ID and stable signing configuration preserved.

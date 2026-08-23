@@ -1,0 +1,8 @@
+OwnerGuard v1.0.20
+
+- Detects HTML, Cloudflare Access, 404, redirects, and invalid JSON before parsing.
+- Checks OwnerGuard Cloud API version before signup/login.
+- Requires OwnerGuard Cloud 1.3.0 or newer for app account registration.
+- Uses /mobile_api.php as a fallback when /api/mobile_*.php is unavailable.
+- Replaces raw JSONObject exceptions with exact setup guidance.
+- Preserves selectable app-lock timeout, selfie calibration, cloud backup, six-digit PIN, and signing identity.

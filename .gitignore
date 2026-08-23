@@ -1,0 +1,18 @@
+# Added by GitHub Android Web Builder
+.gradle/
+local.properties
+**/build/
+.idea/
+*.iml
+
+# Release signing material must only exist ephemerally in GitHub Actions.
+signing/*.jks
+signing/*.keystore
+signing/keystore.properties
+
+# Local/CI credential material.
+*.p12
+*.pem
+*.key
+service-account*.json
+play-service-account*.json

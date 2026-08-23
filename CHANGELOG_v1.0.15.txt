@@ -1,0 +1,7 @@
+OwnerGuard v1.0.15
+- Exact 6-digit app PIN required
+- Legacy 4-8 digit PIN migration flow
+- Immediate foreground-loss session lock
+- Authentication enforced when sensitive screens return
+- Replaced VideoView with MediaPlayer + SurfaceView for Samsung in-app playback
+- External player fallback retained

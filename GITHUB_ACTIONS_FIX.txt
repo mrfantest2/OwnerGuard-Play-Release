@@ -1,0 +1,3 @@
+Fixes GitHub Actions error: ./gradlew: cannot execute binary file: Exec format error.
+The Unix gradlew launcher is now a shell script and the workflow runs chmod +x before building.
+Package com.fantest.ownerguard, version 1.0.26, signing files, and application data compatibility are unchanged.

@@ -1,0 +1,8 @@
+{
+  "project": "OwnerGuard",
+  "version": "1.0.26",
+  "entry": "build_termux.sh",
+  "action": "build_install",
+  "output": "/sdcard/Download/OwnerGuard_Android_v1.0.26_ADMIN_ESCROW.apk",
+  "fix": "compact vault rows with encrypted photo thumbnail previews"
+}

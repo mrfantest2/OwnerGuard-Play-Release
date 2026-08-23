@@ -1,0 +1,16 @@
+name: OwnerGuard 1.0.37 Vertical Cloud Control Center — superseded
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  superseded:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Release status
+        run: |
+          echo "OwnerGuard 1.0.37 is superseded by the 1.0.38 credential-event evidence workflow."
+          echo "This workflow is manual-only and cannot republish the older mandatory APK."

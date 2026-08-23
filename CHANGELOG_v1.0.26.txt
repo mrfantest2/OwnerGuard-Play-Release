@@ -1,0 +1,9 @@
+OwnerGuard Android v1.0.26
+
+- Dual-envelope OGC2 encrypted cloud evidence.
+- Every new object uses a random AES-256-GCM content key.
+- Content keys are wrapped for both the user recovery key and OwnerGuard Administrator RSA-OAEP-256 escrow.
+- New uploads require an active signed-in cloud account and active Administrator escrow public key.
+- Adds explicit one-time re-upload migration for locally retained legacy incidents.
+- Existing package ID, signing key, local vault, PIN, and settings are preserved.
+- Cloud backup pauses until the user explicitly approves the Administrator recovery disclosure.

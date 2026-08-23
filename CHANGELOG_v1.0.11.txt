@@ -1,0 +1,10 @@
+OwnerGuard v1.0.11
+- Replaced fragile VideoView playback with TextureView + MediaPlayer
+- Added external player fallback
+- Validates MP4 duration before encryption and playback
+- Uses H.264 baseline profile, 24 fps, and supported front-camera stream sizes
+- Added optional location permission and best available recent location in event metadata
+- Added stamped photo sharing with timestamp and location
+- Added video sharing with evidence card, timestamp, coordinates, and Maps link
+- Added Share all evidence
+- Temporary exports remain in private cache and are exposed read-only through a custom provider

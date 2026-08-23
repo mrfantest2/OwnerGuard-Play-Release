@@ -1,0 +1,5 @@
+OwnerGuard v1.0.21
+
+- App sign-up creates active Viewer accounts immediately.
+- Successful sign-up signs the user in automatically.
+- Updated cloud compatibility requirement to v1.3.2.

@@ -1,0 +1,6 @@
+OwnerGuard v1.0.5
+- Explicit 5-second silent video capture retained and documented
+- Improved selfie recognition with up to 5 owner selfie samples
+- Added mirrored comparison for front-camera variance
+- Added clear owner selfie samples button
+- Incident metadata now shows video seconds and enrolled selfie sample count

@@ -1,0 +1,9 @@
+OwnerGuard v1.0.18
+
+- Added secure built-in self-updater.
+- Checks OwnerGuard Cloud once daily and manually from Vault & settings.
+- Downloads updates only over HTTPS from the configured OwnerGuard Cloud host.
+- Rejects cross-host redirects.
+- Verifies package ID, newer version code, release SHA-256, APK parseability, and exact signing-certificate match.
+- Uses Android's normal package installer; no silent installation.
+- Added support for OwnerGuard Cloud v1.2.0 multi-user dashboard.

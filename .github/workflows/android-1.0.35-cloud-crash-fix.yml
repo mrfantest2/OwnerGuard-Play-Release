@@ -1,0 +1,16 @@
+name: OwnerGuard 1.0.35 Cloud Drawer Crash Fix — superseded
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  superseded:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Release status
+        run: |
+          echo "OwnerGuard 1.0.35 is superseded by the 1.0.37 vertical Cloud control-center workflow."
+          echo "This workflow is manual-only and no longer participates in pull-request checks."
