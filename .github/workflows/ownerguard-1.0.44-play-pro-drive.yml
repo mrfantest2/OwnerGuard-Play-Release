@@ -65,7 +65,7 @@ jobs:
           test "${RUNNER_OS}" = "Linux"
           test "${GITHUB_REF}" = "refs/heads/release/1.0.44-play-pro-drive" || test "${GITHUB_EVENT_NAME}" = "workflow_dispatch" || test "${GITHUB_EVENT_NAME}" = "pull_request"
           printf 'source_commit=%s\n' "${GITHUB_SHA}" | tee source-commit.txt
-          if grep -R -n -E 'runs-on:[[:space:]]*self-hosted|MASTER-PC|KDT Control|MasterForge|DeckForge|Steam Deck|OnePlus 7|Samsung A73' .github/workflows --include='*.yml' --include='*.yaml'; then
+          if grep -R -n -E 'runs-on:[[:space:]]*self-hosted|MASTER-PC|KDT Control|MasterForge|DeckForge|Steam Deck|OnePlus 7|Samsung A73' .github/workflows --include='*.yml' --include='*.yaml' --exclude='ownerguard-1.0.44-play-pro-drive.yml'; then
             echo 'A forbidden local/device release dependency remains in active workflows.' >&2
             exit 1
           fi
