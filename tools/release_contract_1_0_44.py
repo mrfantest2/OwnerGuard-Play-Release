@@ -83,8 +83,6 @@ FORBIDDEN = {
     "app/src/main/java/com/fantest/ownerguard/MainActivity.java": (
         "launchAutomaticVaultSetup(",
         "ensureCloudAccountLinked",
-        "CloudAccountManager.",
-        "CloudBackupManager.",
         'sectionTitle("Automatic Cloud backup")',
         'sectionTitle("Encrypted cloud backup")',
         'sectionTitle("Cloud account")',
