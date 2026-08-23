@@ -1,11 +1,6 @@
 name: Bootstrap sanitized OwnerGuard 1.0.44
 
 on:
-  push:
-    branches:
-      - migration/v1.0.44-sanitized-snapshot
-    paths:
-      - migration-trigger.txt
   pull_request:
     branches:
       - main
@@ -28,7 +23,7 @@ env:
 jobs:
   migrate:
     name: Validate and import sanitized source
-    if: github.event_name == 'push' || github.head_ref == 'migration/v1.0.44-sanitized-snapshot'
+    if: github.head_ref == 'migration/v1.0.44-sanitized-snapshot'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
