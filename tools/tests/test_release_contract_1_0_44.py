@@ -88,6 +88,16 @@ class ReleaseContractTests(unittest.TestCase):
             errors = validate_tree(root)
             self.assertTrue(any("ENROLLMENT_ORIENTATIONS" in error for error in errors), errors)
 
+    def test_retired_cloud_auth_stub_preserves_request_code_compile_surface(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_valid_tree(root)
+            auth = root / "app/src/main/java/com/fantest/ownerguard/CloudAuthActivity.java"
+            auth.parent.mkdir(parents=True, exist_ok=True)
+            auth.write_text("public class CloudAuthActivity {}\n", encoding="utf-8")
+            errors = validate_tree(root)
+            self.assertTrue(any("REQUEST_CODE" in error for error in errors), errors)
+
 
 if __name__ == "__main__":
     unittest.main()
