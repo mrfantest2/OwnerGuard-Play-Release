@@ -43,17 +43,17 @@ REQUIRED = {
         "ProBackupActivity.class",
         "OwnerGuard Pro",
         "Google Play managed release",
+        "Create an exact 6-digit OwnerGuard PIN",
     ),
     "app/src/main/java/com/fantest/ownerguard/CloudAccountManager.java": (
-        'MIN_SERVER_VERSION = "1.3.27.6"',
+        "HOSTED_ACCOUNT_DISABLED = true",
     ),
     "app/src/main/java/com/fantest/ownerguard/CloudBackupManager.java": (
-        "APPEND_OR_REPLACE",
-        "Resuming Cloud upload",
+        "LEGACY_HOSTED_CLOUD_DISABLED = true",
     ),
-    "app/src/main/java/com/fantest/ownerguard/CloudBackupEngine.java": (
-        "session_rebound",
-        "markUploadingObject",
+    "app/src/main/java/com/fantest/ownerguard/FaceSimilarity.java": (
+        "ENROLLMENT_ORIENTATIONS = new int[]{0, 90, 270, 180}",
+        "descriptorEnrollmentVariants(bitmap)",
     ),
     "app/src/main/java/com/fantest/ownerguard/PinStore.java": (
         "PIN must contain exactly six digits",
@@ -80,6 +80,22 @@ FORBIDDEN = {
         "Install OwnerGuard updates",
         'INSTALL_UPDATES = "install_updates"',
     ),
+    "app/src/main/java/com/fantest/ownerguard/MainActivity.java": (
+        "launchAutomaticVaultSetup(",
+        "ensureCloudAccountLinked",
+        "CloudAccountManager.",
+        "CloudBackupManager.",
+        'sectionTitle("Automatic Cloud backup")',
+        'sectionTitle("Encrypted cloud backup")',
+        'sectionTitle("Cloud account")',
+        "new CloudSyncStatusView(this)",
+    ),
+}
+
+GLOBAL_ANDROID_FORBIDDEN = {
+    "fantest.win": "legacy fantest.win hosted-cloud domain",
+    "Create your username and six-digit OwnerGuard PIN": "forced hosted-cloud registration",
+    "Cloud backup is enabled automatically": "forced hosted-cloud registration",
 }
 
 CREDENTIAL_PATHS = (
@@ -110,6 +126,21 @@ def validate_tree(root: Path) -> list[str]:
         for token in tokens:
             if token in text:
                 errors.append(f"forbidden Play-release token in {relative}: {token}")
+
+    app_source = root / "app/src/main"
+    if app_source.is_dir():
+        for path in app_source.rglob("*"):
+            if not path.is_file() or path.suffix.lower() not in {".java", ".kt", ".xml", ".json", ".txt"}:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                continue
+            for token, label in GLOBAL_ANDROID_FORBIDDEN.items():
+                if token in text:
+                    errors.append(
+                        f"{label} is forbidden in {path.relative_to(root)}: {token}"
+                    )
 
     for relative in CREDENTIAL_PATHS:
         if (root / relative).exists():
