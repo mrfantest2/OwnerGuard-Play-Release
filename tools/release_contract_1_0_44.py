@@ -59,6 +59,9 @@ REQUIRED = {
         "ENROLLMENT_ORIENTATIONS = new int[]{0, 90, 270, 180}",
         "descriptorEnrollmentVariants(bitmap)",
     ),
+    "app/src/main/java/com/fantest/ownerguard/EnrollmentActivity.java": (
+        "if (!BuildConfig.DEBUG) getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);",
+    ),
     "app/src/main/java/com/fantest/ownerguard/PinStore.java": (
         "PIN must contain exactly six digits",
     ),
