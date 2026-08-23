@@ -33,15 +33,10 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Checkout public migration branch
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-
-      - name: Require one-time private-source token
+      - name: Require one-time migration tokens
         env:
           SOURCE_REPO_TOKEN: ${{ secrets.SOURCE_REPO_TOKEN }}
+          DEST_PUSH_TOKEN: ${{ secrets.DEST_PUSH_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -49,6 +44,19 @@ jobs:
             echo 'Required Actions secret SOURCE_REPO_TOKEN is missing.' >&2
             exit 1
           fi
+          if [[ -z "${DEST_PUSH_TOKEN}" ]]; then
+            echo 'Required Actions secret DEST_PUSH_TOKEN is missing.' >&2
+            echo 'It must be able to write repository contents and workflow files.' >&2
+            exit 1
+          fi
+
+      - name: Checkout public migration branch
+        uses: actions/checkout@v4
+        with:
+          ref: migration/v1.0.44-sanitized-snapshot
+          fetch-depth: 0
+          token: ${{ secrets.DEST_PUSH_TOKEN }}
+          persist-credentials: true
 
       - name: Checkout exact private source commit
         uses: actions/checkout@v4
