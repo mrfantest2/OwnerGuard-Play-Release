@@ -32,6 +32,7 @@ STACK = (
     "apply_upload_pipeline_repair.py",
     "apply_release_1_0_43.py",
     "apply_release_1_0_44.py",
+    "fix_android16_lint.py",
 )
 
 
