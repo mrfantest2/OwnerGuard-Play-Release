@@ -45,6 +45,10 @@ REQUIRED = {
         "Google Play managed release",
         "Create an exact 6-digit OwnerGuard PIN",
     ),
+    "app/src/main/java/com/fantest/ownerguard/CloudAuthActivity.java": (
+        "REQUEST_CODE",
+        "Online OwnerGuard accounts are not required in this Play release.",
+    ),
     "app/src/main/java/com/fantest/ownerguard/CloudAccountManager.java": (
         "HOSTED_ACCOUNT_DISABLED = true",
     ),
