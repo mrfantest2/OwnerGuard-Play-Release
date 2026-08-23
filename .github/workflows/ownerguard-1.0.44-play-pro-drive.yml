@@ -212,9 +212,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager 'platform-tools' 'emulator' 'platforms;android-36' 'system-images;android-36;google_apis;x86_64'
-          echo no | avdmanager create avd --force --name ownerguard_api36 --package 'system-images;android-36;google_apis;x86_64' --device 'pixel_6'
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="${SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "${SDKMANAGER}" ]; then
+            SDKMANAGER="$(find "${SDK_ROOT}/cmdline-tools" -type f -name sdkmanager -perm -u+x 2>/dev/null | sort | tail -1)"
+          fi
+          test -n "${SDKMANAGER}" && test -x "${SDKMANAGER}"
+          AVDMANAGER="$(dirname "${SDKMANAGER}")/avdmanager"
+          test -x "${AVDMANAGER}"
+          yes | "${SDKMANAGER}" --licenses >/dev/null 2>&1 || true
+          "${SDKMANAGER}" 'platform-tools' 'emulator' 'platforms;android-36' 'system-images;android-36;google_apis;x86_64'
+          echo no | "${AVDMANAGER}" create avd --force --name ownerguard_api36 --package 'system-images;android-36;google_apis;x86_64' --device 'pixel_6'
           if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
 
       - name: Launch emulator and smoke test OwnerGuard
