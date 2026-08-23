@@ -117,15 +117,37 @@ if "ProBackupActivity.class" not in main:
     section = section[:marker_pos] + insertion + section[marker_pos:]
     main = main[:method] + section + main[end:]
 
-# Rewrite update UX for this Play branch.
-main = main.replace('sectionTitle("Secure app updates")', 'sectionTitle("App updates")')
-main = re.sub(
-    r'labelCard\("OwnerGuard checks daily using Android WorkManager and accepts only a newer APK with the same package ID, exact byte count, matching SHA-256, and the exact installed signing certificate\. Downloads finalize atomically, and Android always shows the final Update confirmation\."\)',
-    'labelCard("OwnerGuard 1.0.44 is a Google Play managed release. Application updates are delivered by Google Play; OwnerGuard does not sideload replacement APKs in this build.")',
-    main,
+# Rewrite update UX for this Play branch using structural anchors rather than
+# depending on the exact explanatory sentence emitted by earlier lineage patches.
+play_update_message = (
+    "OwnerGuard 1.0.44 is a Google Play managed release. Application updates are delivered by "
+    "Google Play; OwnerGuard does not sideload replacement APKs in this build."
 )
-main = main.replace('button("Check for signed OwnerGuard update",v->AppUpdateManager.check(this,true))',
-                    'button("Check Google Play update status",v->AppUpdateManager.check(this,true))')
+update_block = re.compile(
+    r'(?m)^        page\.addView\(sectionTitle\("(?:Secure app updates|App updates)"\),topMargin\(22\)\);\n'
+    r'^        page\.addView\(labelCard\("[^\n]*"\),topMargin\(10\)\);'
+)
+update_replacement = (
+    '        page.addView(sectionTitle("App updates"),topMargin(22));\n'
+    f'        page.addView(labelCard("{play_update_message}"),topMargin(10));'
+)
+main, update_count = update_block.subn(update_replacement, main, count=1)
+if update_count != 1 and not (
+    'sectionTitle("App updates")' in main and play_update_message in main
+):
+    raise SystemExit("OwnerGuard 1.0.44 could not structurally rewrite the app-update section")
+
+button_pattern = re.compile(
+    r'button\("(?:Check for signed OwnerGuard update|Check Google Play update status)",'
+    r'v->AppUpdateManager\.check\(this,true\)\)'
+)
+main, button_count = button_pattern.subn(
+    'button("Check Google Play update status",v->AppUpdateManager.check(this,true))',
+    main,
+    count=1,
+)
+if button_count != 1 and 'button("Check Google Play update status",v->AppUpdateManager.check(this,true))' not in main:
+    raise SystemExit("OwnerGuard 1.0.44 could not rewrite the update-status button")
 MAIN.write_text(main, encoding="utf-8")
 
 # Force the updater subsystem into Play-managed mode while preserving call compatibility.
