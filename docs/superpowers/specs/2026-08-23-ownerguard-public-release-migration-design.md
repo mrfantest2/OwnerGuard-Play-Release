@@ -48,6 +48,7 @@ After successful migration, `SOURCE_REPO_TOKEN` must be deleted from the public 
 9. Add public migration provenance and the source SHA-256 manifest.
 10. Perform a second staged-tree credential/path scan.
 11. Commit the fresh public snapshot and push only the new public release branch.
+12. After the release branch exists, make one connector-authored non-production provenance/CI-trigger commit on that branch. This push is intentionally outside the migration workflow's `GITHUB_TOKEN`, so the imported release workflow starts normally.
 
 ## Fresh-history guarantee
 
@@ -70,7 +71,7 @@ The scan intentionally permits workflow references such as `${OWNERGUARD_KEYSTOR
 
 ## Public CI handoff
 
-The imported source already contains the authoritative `OwnerGuard 1.0.44 GitHub Release` workflow. Pushing the fresh release snapshot to `release/1.0.44-play-pro-drive` should automatically start public GitHub-hosted QA on `ubuntu-latest`:
+The imported source already contains the authoritative `OwnerGuard 1.0.44 GitHub Release` workflow. GitHub suppresses recursive workflow execution for pushes made with a workflow's own `GITHUB_TOKEN`, so the migration push only creates the fresh release branch. A subsequent connector-authored provenance/CI-trigger commit on `release/1.0.44-play-pro-drive` starts public GitHub-hosted QA on `ubuntu-latest`:
 
 - release-contract validation
 - dependency verification
@@ -79,7 +80,7 @@ The imported source already contains the authoritative `OwnerGuard 1.0.44 GitHub
 - debug/release/AAB build
 - Android API 36 emulator install/launch/logcat smoke QA
 
-No production Play submission occurs from the migration commit because its commit message does not contain `[play-production]`.
+Neither migration commit nor the connector-authored CI-trigger commit contains `[play-production]`, so no production Play submission occurs.
 
 ## Production gating
 
@@ -92,5 +93,6 @@ Migration is complete only when:
 1. the public release branch exists with fresh public-only history;
 2. source/destination manifests match exactly before provenance files are added;
 3. no forbidden signing/credential material is tracked;
-4. the public GitHub Actions QA and emulator jobs execute and pass, or expose a repository-controlled defect that can be repaired in GitHub;
-5. the private source token is no longer required and is revoked/deleted after successful import.
+4. the connector-authored release-branch push starts public GitHub-hosted QA and emulator jobs;
+5. QA passes, or exposes a repository-controlled defect that can be repaired in GitHub;
+6. the private source token is no longer required and is revoked/deleted after successful import.
