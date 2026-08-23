@@ -4,9 +4,9 @@
 
 **Goal:** Transfer the exact sanitized OwnerGuard 1.0.44 working tree into a fresh public GitHub repository with no private Git history, then run the authoritative public GitHub-hosted QA pipeline.
 
-**Architecture:** A one-time bootstrap workflow in the new public repository checks out the exact private source SHA with a short-lived read-only token, scans it for forbidden credentials/signing material, copies only the working tree into a fresh public release branch, verifies byte-for-byte source/destination manifests, and pushes the branch. The imported release workflow then runs public `ubuntu-latest` QA and emulator validation; production remains separately gated.
+**Architecture:** A one-time bootstrap workflow in the new public repository checks out the exact private source SHA with a short-lived read-only token, scans it for forbidden credentials/signing material, copies only the working tree into a fresh public release branch, verifies byte-for-byte source/destination manifests, and pushes the branch. Because GitHub suppresses recursive Actions runs from `GITHUB_TOKEN` pushes, a subsequent connector-authored provenance/CI-trigger commit starts the imported public QA workflow. Production remains separately gated.
 
-**Tech Stack:** GitHub Actions, actions/checkout, Bash, Git, rsync/cp, SHA-256, Gradle/Android SDK via the imported release workflow.
+**Tech Stack:** GitHub Actions, actions/checkout, Bash, Git, SHA-256, Gradle/Android SDK via the imported release workflow.
 
 **Spec:** `docs/superpowers/specs/2026-08-23-ownerguard-public-release-migration-design.md`
 
@@ -54,7 +54,7 @@
 
 **Interfaces:**
 - Consumes: `_source` checkout at the exact pinned SHA.
-- Produces: `source-manifest.txt`, or fails before destination mutation.
+- Produces: a source manifest in `$RUNNER_TEMP`, or fails before destination mutation.
 
 - [ ] Assert `_source` HEAD equals `af2ffe1b87cfd9199452a1947dfbc21d0acf98be`.
 - [ ] Reject `signing/keystore.properties`, `*.jks`, `*.keystore`, `*.p12`, `*.pem`, `*.key`, and service-account credential files.
@@ -69,13 +69,13 @@
 - Generate on release branch: `docs/releases/1.0.44-source-sha256.txt`
 
 **Interfaces:**
-- Consumes: validated `_source` working tree and `source-manifest.txt`.
+- Consumes: validated `_source` working tree and source manifest.
 - Produces: `release/1.0.44-play-pro-drive` containing the exact source working tree plus public migration provenance files.
 
 - [ ] Create/reset local branch `release/1.0.44-play-pro-drive` from the public migration branch only.
-- [ ] Remove existing public working-tree files without touching destination `.git`.
+- [ ] Remove existing public working-tree files without touching destination `.git` or the isolated `_source` checkout.
 - [ ] Remove `_source/.git`, copy `_source` byte-for-byte into the repository root, then remove `_source`.
-- [ ] Generate a destination manifest before provenance additions and require exact equality with `source-manifest.txt`.
+- [ ] Generate a destination manifest before provenance additions and require exact equality with the source manifest.
 - [ ] Add provenance text identifying source repository, exact source SHA, lineage anchor, destination, and fresh-history guarantee.
 - [ ] Copy the source manifest to `docs/releases/1.0.44-source-sha256.txt`.
 
@@ -86,24 +86,26 @@
 
 **Interfaces:**
 - Consumes: staged release snapshot.
-- Produces: remote `release/1.0.44-play-pro-drive` branch and automatic public release QA run.
+- Produces: remote `release/1.0.44-play-pro-drive` branch.
 
 - [ ] Run the same forbidden credential/path checks against the destination tree.
 - [ ] Configure a non-secret GitHub Actions commit identity.
 - [ ] Commit with message `release: import sanitized OwnerGuard 1.0.44 snapshot`.
 - [ ] Push `HEAD:release/1.0.44-play-pro-drive` with the destination repository `GITHUB_TOKEN`.
-- [ ] Confirm the imported release workflow is present and therefore triggers QA on the release-branch push.
+- [ ] Confirm the imported `OwnerGuard 1.0.44 GitHub Release` workflow exists on the release branch.
 
-### Task 5: Public QA and emulator validation
+### Task 5: Trigger and inspect public QA
 
 **Files:**
+- Create on release branch: `docs/releases/1.0.44-public-ci-trigger.md`
 - Existing imported workflow: `.github/workflows/ownerguard-1.0.44-play-pro-drive.yml`
 
 **Interfaces:**
-- Consumes: fresh public release branch.
-- Produces: GitHub Actions QA evidence and emulator evidence.
+- Consumes: fresh public release branch created by the migration workflow.
+- Produces: connector-authored push and a normal public GitHub Actions QA run.
 
-- [ ] Inspect the public workflow run created by the migration push.
+- [ ] Create `docs/releases/1.0.44-public-ci-trigger.md` through the GitHub connector, with no `[play-production]` marker.
+- [ ] Verify the connector-authored release-branch push starts the imported release workflow.
 - [ ] Verify jobs actually start on GitHub-hosted `ubuntu-latest` instead of failing before step one.
 - [ ] Inspect Python contract tests, Gradle dependency checks, unit tests, lint, build, and artifact steps.
 - [ ] Inspect Android API 36 emulator install/launch/logcat smoke QA.
