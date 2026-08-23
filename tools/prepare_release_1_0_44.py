@@ -34,6 +34,7 @@ STACK = (
     "apply_release_1_0_44.py",
     "fix_android16_lint.py",
     "fix_play_local_only_face_enrollment.py",
+    "fix_local_auth_compile_surface.py",
 )
 
 
