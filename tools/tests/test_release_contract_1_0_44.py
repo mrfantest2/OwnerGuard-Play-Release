@@ -98,20 +98,20 @@ class ReleaseContractTests(unittest.TestCase):
             errors = validate_tree(root)
             self.assertTrue(any("REQUEST_CODE" in error for error in errors), errors)
 
-    def test_enrollment_is_recordable_only_in_debug_while_release_stays_secure(self):
+    def test_enrollment_is_recordable_only_when_app_is_debuggable(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.make_valid_tree(root)
             enrollment = root / "app/src/main/java/com/fantest/ownerguard/EnrollmentActivity.java"
             enrollment.write_text(
                 enrollment.read_text(encoding="utf-8").replace(
-                    "if (!BuildConfig.DEBUG) getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);",
+                    "if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0) getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);",
                     "getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);",
                 ),
                 encoding="utf-8",
             )
             errors = validate_tree(root)
-            self.assertTrue(any("BuildConfig.DEBUG" in error for error in errors), errors)
+            self.assertTrue(any("FLAG_DEBUGGABLE" in error for error in errors), errors)
 
 
 if __name__ == "__main__":
