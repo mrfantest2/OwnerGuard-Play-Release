@@ -47,7 +47,6 @@ jobs:
           set -euo pipefail
           if [[ -z "${SOURCE_REPO_TOKEN}" ]]; then
             echo 'Required Actions secret SOURCE_REPO_TOKEN is missing.' >&2
-            echo 'Use a short-lived fine-grained token with Contents: Read-only on the private source repository only.' >&2
             exit 1
           fi
 
@@ -61,49 +60,40 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Verify source identity and reject credential material
+      - name: Verify exact source and generate manifest
         shell: bash
         run: |
           set -euo pipefail
 
           actual_sha="$(git -C _source rev-parse HEAD)"
-          if [[ "${actual_sha}" != "${SOURCE_SHA}" ]]; then
-            echo "Source checkout mismatch: expected ${SOURCE_SHA}, got ${actual_sha}" >&2
+          test "${actual_sha}" = "${SOURCE_SHA}"
+
+          forbidden="$(find _source -type f ! -path '_source/.git/*' \( \
+            -path '*/signing/keystore.properties' -o \
+            -iname '*.jks' -o -iname '*.keystore' -o -iname '*.p12' -o \
+            -iname '*.pem' -o -iname '*.key' -o \
+            -iname 'service-account*.json' -o -iname 'play-service-account*.json' \
+          \) -print)"
+          if [[ -n "${forbidden}" ]]; then
+            echo 'Forbidden signing/credential files detected:' >&2
+            printf '%s\n' "${forbidden}" >&2
             exit 1
           fi
 
-          scan_tree() {
-            local root="$1"
-            local forbidden
-            forbidden="$(find "${root}" -type f ! -path "${root}/.git/*" \( \
-              -path '*/signing/keystore.properties' -o \
-              -iname '*.jks' -o -iname '*.keystore' -o -iname '*.p12' -o \
-              -iname '*.pem' -o -iname '*.key' -o \
-              -iname 'service-account*.json' -o -iname 'play-service-account*.json' \
-            \) -print)"
-            if [[ -n "${forbidden}" ]]; then
-              echo 'Forbidden signing/credential files detected:' >&2
-              printf '%s\n' "${forbidden}" >&2
-              return 1
-            fi
+          if grep -R -n -I -E --exclude-dir=.git -- '-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----' _source; then
+            echo 'Private-key block detected in source.' >&2
+            exit 1
+          fi
 
-            if grep -R -n -I -E --exclude-dir=.git -- '-----BEGIN ([A-Z0-9]+ )?PRIVATE KEY-----' "${root}"; then
-              echo 'Private-key block detected in source.' >&2
-              return 1
-            fi
+          if grep -R -n -I -E --exclude-dir=.git --exclude='*.md' -- '"private_key"[[:space:]]*:[[:space:]]*"-----BEGIN' _source; then
+            echo 'Service-account private key detected in source.' >&2
+            exit 1
+          fi
 
-            if grep -R -n -I -E --exclude-dir=.git --exclude='*.md' -- '"private_key"[[:space:]]*:[[:space:]]*"-----BEGIN' "${root}"; then
-              echo 'Service-account private key detected in source.' >&2
-              return 1
-            fi
-
-            if grep -R -n -I -E --exclude-dir=.git --exclude-dir=docs -- '(^|[^A-Za-z])(storePassword|keyPassword)[[:space:]]*=[[:space:]]*[^$[:space:]]' "${root}"; then
-              echo 'Literal Gradle signing password assignment detected.' >&2
-              return 1
-            fi
-          }
-
-          scan_tree _source
+          if grep -R -n -I -E --exclude-dir=.git --exclude-dir=docs -- '(^|[^A-Za-z])(storePassword|keyPassword)[[:space:]]*=[[:space:]]*[^$[:space:]]' _source; then
+            echo 'Literal Gradle signing password assignment detected.' >&2
+            exit 1
+          fi
 
           python3 - _source "${RUNNER_TEMP}/source-manifest.txt" <<'PY'
           import hashlib
@@ -122,8 +112,7 @@ jobs:
               st = path.lstat()
               mode = stat.S_IMODE(st.st_mode)
               if path.is_symlink():
-                  target = os.readlink(path).encode('utf-8', 'surrogateescape')
-                  digest = hashlib.sha256(target).hexdigest()
+                  digest = hashlib.sha256(os.readlink(path).encode('utf-8', 'surrogateescape')).hexdigest()
                   kind = 'symlink'
               elif path.is_file():
                   h = hashlib.sha256()
@@ -151,7 +140,6 @@ jobs:
           fi
 
           git checkout -B "${RELEASE_BRANCH}"
-
           find . -mindepth 1 -maxdepth 1 ! -name '.git' ! -name '_source' -exec rm -rf -- {} +
           rm -rf _source/.git
           cp -a _source/. .
@@ -174,8 +162,7 @@ jobs:
               st = path.lstat()
               mode = stat.S_IMODE(st.st_mode)
               if path.is_symlink():
-                  target = os.readlink(path).encode('utf-8', 'surrogateescape')
-                  digest = hashlib.sha256(target).hexdigest()
+                  digest = hashlib.sha256(os.readlink(path).encode('utf-8', 'surrogateescape')).hexdigest()
                   kind = 'symlink'
               elif path.is_file():
                   h = hashlib.sha256()
@@ -194,18 +181,25 @@ jobs:
 
           mkdir -p docs/releases
           cp "${RUNNER_TEMP}/source-manifest.txt" docs/releases/1.0.44-source-sha256.txt
-          cat > docs/releases/1.0.44-public-migration-provenance.md <<EOF
-          # OwnerGuard 1.0.44 Public Migration Provenance
 
-          - Source repository: \`${SOURCE_REPO}\`
-          - Exact source commit: \`${SOURCE_SHA}\`
-          - Original validated lineage anchor: \`${LINEAGE_SHA}\`
-          - Destination repository: \`${GITHUB_REPOSITORY}\`
-          - Destination release branch: \`${RELEASE_BRANCH}\`
-          - Migration workflow run: \`${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\`
+          python3 - "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}" "${SOURCE_REPO}" "${SOURCE_SHA}" "${LINEAGE_SHA}" "${RELEASE_BRANCH}" <<'PY'
+          import sys
+          from pathlib import Path
 
-          The private repository Git history was not imported. The source checkout Git metadata was removed before copy. `docs/releases/1.0.44-source-sha256.txt` records the exact file/symlink content hashes and executable modes of the private source working tree before provenance files were added.
-          EOF
+          repo, run_id, source_repo, source_sha, lineage_sha, release_branch = sys.argv[1:]
+          text = f'''# OwnerGuard 1.0.44 Public Migration Provenance
+
+          - Source repository: {source_repo}
+          - Exact source commit: {source_sha}
+          - Original validated lineage anchor: {lineage_sha}
+          - Destination repository: {repo}
+          - Destination release branch: {release_branch}
+          - Migration workflow run: https://github.com/{repo}/actions/runs/{run_id}
+
+          The private repository Git history was not imported. The source checkout Git metadata was removed before copy. docs/releases/1.0.44-source-sha256.txt records the exact file/symlink content hashes and executable modes of the private source working tree before provenance files were added.
+          '''
+          Path('docs/releases/1.0.44-public-migration-provenance.md').write_text(text, encoding='utf-8')
+          PY
 
       - name: Re-scan destination and push fresh release branch
         shell: bash
@@ -246,7 +240,6 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
-          git diff --cached --check
           git commit -m 'release: import sanitized OwnerGuard 1.0.44 snapshot'
           git push origin "HEAD:refs/heads/${RELEASE_BRANCH}"
 
