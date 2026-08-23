@@ -55,6 +55,39 @@ class ReleaseContractTests(unittest.TestCase):
             errors = validate_tree(root)
             self.assertTrue(any("credential" in error for error in errors), errors)
 
+    def test_fantest_hosted_cloud_domain_is_rejected_anywhere_in_android_source(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_valid_tree(root)
+            legacy = root / "app/src/main/java/com/fantest/ownerguard/LegacyHostedCloud.java"
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy.write_text('final class LegacyHostedCloud { String u = "https://ki.fantest.win/ownerguard_cloud"; }\n', encoding="utf-8")
+            errors = validate_tree(root)
+            self.assertTrue(any("fantest.win" in error for error in errors), errors)
+
+    def test_forced_cloud_registration_copy_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_valid_tree(root)
+            main = root / "app/src/main/java/com/fantest/ownerguard/MainActivity.java"
+            main.write_text(
+                main.read_text(encoding="utf-8")
+                + 'String legacy = "Create your username and six-digit OwnerGuard PIN. Cloud backup is enabled automatically.";\n',
+                encoding="utf-8",
+            )
+            errors = validate_tree(root)
+            self.assertTrue(any("forced hosted-cloud registration" in error for error in errors), errors)
+
+    def test_oneplus_safe_enrollment_orientation_contract_is_required(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.make_valid_tree(root)
+            face = root / "app/src/main/java/com/fantest/ownerguard/FaceSimilarity.java"
+            face.parent.mkdir(parents=True, exist_ok=True)
+            face.write_text("final class FaceSimilarity {}\n", encoding="utf-8")
+            errors = validate_tree(root)
+            self.assertTrue(any("ENROLLMENT_ORIENTATIONS" in error for error in errors), errors)
+
 
 if __name__ == "__main__":
     unittest.main()
