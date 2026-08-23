@@ -60,7 +60,7 @@ REQUIRED = {
         "descriptorEnrollmentVariants(bitmap)",
     ),
     "app/src/main/java/com/fantest/ownerguard/EnrollmentActivity.java": (
-        "if (!BuildConfig.DEBUG) getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);",
+        "if ((getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0) getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);",
     ),
     "app/src/main/java/com/fantest/ownerguard/PinStore.java": (
         "PIN must contain exactly six digits",
