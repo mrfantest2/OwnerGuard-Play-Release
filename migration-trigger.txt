@@ -1,0 +1,2 @@
+OwnerGuard 1.0.44 sanitized migration preflight.
+No production publication is authorized by this trigger.
