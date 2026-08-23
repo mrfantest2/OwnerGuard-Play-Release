@@ -37,6 +37,7 @@ STACK = (
     "fix_local_auth_compile_surface.py",
     "fix_enrollment_debug_screen_capture.py",
     "fix_oneplus_enrollment_preview_fallback.py",
+    "fix_unused_app_manual_confirmation.py",
 )
 
 
