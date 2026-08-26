@@ -67,6 +67,9 @@ REQUIRED = {
     ),
     "app/src/main/java/com/fantest/ownerguard/OwnerGuardRequirements.java": (
         "REQUEST_OWNER_FACE = 2042",
+        "UNVERIFIABLE_OEM_SETTINGS_ARE_ADVISORY = true",
+        'appendAdvisory(out, "Pause app activity if unused"',
+        'appendAdvisory(out, "Samsung Never sleeping apps"',
     ),
     "app/src/main/java/com/fantest/ownerguard/TheftAdminReceiver.java": (
         "ACTION_FAILED_CREDENTIAL",
@@ -86,6 +89,8 @@ FORBIDDEN = {
         "canRequestPackageInstalls",
         "Install OwnerGuard updates",
         'INSTALL_UPDATES = "install_updates"',
+        "if (!unusedAppProtectionReady(context)) out.add(UNUSED_APP);",
+        "if (!samsungNeverSleepingReady(context)) out.add(SAMSUNG_NEVER_SLEEPING);",
     ),
     "app/src/main/java/com/fantest/ownerguard/MainActivity.java": (
         "launchAutomaticVaultSetup(",
