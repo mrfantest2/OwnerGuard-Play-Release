@@ -113,6 +113,37 @@ class ReleaseContractTests(unittest.TestCase):
             errors = validate_tree(root)
             self.assertTrue(any("FLAG_DEBUGGABLE" in error for error in errors), errors)
 
+    def test_compact_ui_vault_export_transform_is_required_and_wired(self):
+        root = TOOLS.parent
+        transform = TOOLS / "fix_compact_ui_vault_export.py"
+        prepare = TOOLS / "prepare_release_1_0_44.py"
+        self.assertTrue(transform.is_file(), "compact UI/vault export transform is missing")
+        self.assertIn(
+            '"fix_compact_ui_vault_export.py"',
+            prepare.read_text(encoding="utf-8"),
+            "compact UI/vault export transform is not wired into deterministic preparation",
+        )
+
+    def test_compact_ui_and_vault_export_release_invariants_are_required(self):
+        self.assertIn("app/src/main/java/com/fantest/ownerguard/VaultActivity.java", REQUIRED)
+        vault_tokens = REQUIRED["app/src/main/java/com/fantest/ownerguard/VaultActivity.java"]
+        for token in (
+            "DEFAULT_PAGE_SIZE = 24",
+            "Select all filtered",
+            "Export this range",
+            "VaultExportManager.exportIncidents",
+        ):
+            self.assertIn(token, vault_tokens)
+
+        self.assertIn("app/src/main/java/com/fantest/ownerguard/VaultExportManager.java", REQUIRED)
+        export_tokens = REQUIRED["app/src/main/java/com/fantest/ownerguard/VaultExportManager.java"]
+        for token in ("evidence_manifest.csv", "ZipOutputStream", "VaultCrypto.decryptBytes"):
+            self.assertIn(token, export_tokens)
+
+        main_tokens = REQUIRED["app/src/main/java/com/fantest/ownerguard/MainActivity.java"]
+        for token in ("Open incident vault", "Permissions & battery", "PIN / password monitoring"):
+            self.assertIn(token, main_tokens)
+
 
 if __name__ == "__main__":
     unittest.main()
