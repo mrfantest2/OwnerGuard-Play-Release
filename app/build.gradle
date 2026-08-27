@@ -28,13 +28,47 @@ android {
 }
 
 // Stable OwnerGuard signing key for direct personal APK updates.
+// This SHA-256 fingerprint is public certificate metadata from the verified
+// OwnerGuard 1.0.42 production release; it is not secret key material.
+def OWNERGUARD_HISTORICAL_SIGNING_CERT_SHA256 = 'BC2E0B8928F9D9F981DB1AF5595D0168D54F73FC9A7AB52D8CED6AD0E5979C9E'
 def signingProps = new Properties()
 def signingFile = rootProject.file('signing/keystore.properties')
 if (signingFile.exists()) {
     signingProps.load(new FileInputStream(signingFile))
+    def configuredStore = rootProject.file(signingProps['storeFile'])
+    if (!configuredStore.isFile()) {
+        throw new GradleException('OwnerGuard signing keystore is missing.')
+    }
+
+    def signingCertificate = null
+    for (String storeType : ['JKS', 'PKCS12']) {
+        if (signingCertificate != null) break
+        try {
+            def keyStore = java.security.KeyStore.getInstance(storeType)
+            configuredStore.withInputStream { stream ->
+                keyStore.load(stream, signingProps['storePassword'].toCharArray())
+            }
+            signingCertificate = keyStore.getCertificate(signingProps['keyAlias'])
+        } catch (Exception ignored) {
+            // Try the other common Android keystore container format without
+            // logging credentials, aliases, private-key material, or errors.
+        }
+    }
+    if (signingCertificate == null) {
+        throw new GradleException('Unable to read the configured OwnerGuard signing certificate.')
+    }
+
+    def actualSigningCertSha256 = java.security.MessageDigest.getInstance('SHA-256')
+        .digest(signingCertificate.encoded)
+        .collect { byteValue -> String.format('%02X', ((byteValue as int) & 0xFF)) }
+        .join()
+    if (actualSigningCertSha256 != OWNERGUARD_HISTORICAL_SIGNING_CERT_SHA256) {
+        throw new GradleException('OwnerGuard signing certificate fingerprint mismatch; refusing to sign with a different identity.')
+    }
+
     android.signingConfigs {
         releaseKey {
-            storeFile rootProject.file(signingProps['storeFile'])
+            storeFile configuredStore
             storePassword signingProps['storePassword']
             keyAlias signingProps['keyAlias']
             keyPassword signingProps['keyPassword']
