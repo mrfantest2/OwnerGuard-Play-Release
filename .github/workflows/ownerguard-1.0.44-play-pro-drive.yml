@@ -222,7 +222,11 @@ jobs:
           test -x "${AVDMANAGER}"
           yes | "${SDKMANAGER}" --licenses >/dev/null 2>&1 || true
           "${SDKMANAGER}" 'platform-tools' 'emulator' 'platforms;android-36' 'system-images;android-36;google_apis;x86_64'
-          echo no | "${AVDMANAGER}" create avd --force --name ownerguard_api36 --package 'system-images;android-36;google_apis;x86_64' --device 'pixel_6'
+          AVD_HOME="${RUNNER_TEMP}/ownerguard-avd"
+          mkdir -p "${AVD_HOME}"
+          echo "ANDROID_AVD_HOME=${AVD_HOME}" >> "${GITHUB_ENV}"
+          printf 'no\n' | ANDROID_AVD_HOME="${AVD_HOME}" "${AVDMANAGER}" create avd --force --name ownerguard_api36 --package 'system-images;android-36;google_apis;x86_64' --device 'pixel_6'
+          test -f "${AVD_HOME}/ownerguard_api36.ini"
           echo "${SDK_ROOT}/platform-tools" >> "${GITHUB_PATH}"
           echo "${SDK_ROOT}/emulator" >> "${GITHUB_PATH}"
           if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
