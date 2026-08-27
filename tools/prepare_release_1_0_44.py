@@ -39,6 +39,7 @@ STACK = (
     "fix_oneplus_enrollment_preview_fallback.py",
     "fix_unused_app_manual_confirmation.py",
     "fix_unverifiable_oem_requirements_advisory.py",
+    "fix_compact_ui_vault_export.py",
 )
 
 
