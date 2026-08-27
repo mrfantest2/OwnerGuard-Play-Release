@@ -236,7 +236,11 @@ jobs:
           EMULATOR_PID=$!
           cleanup(){ kill "${EMULATOR_PID}" 2>/dev/null || true; }
           trap cleanup EXIT
-          adb wait-for-device
+          if ! timeout 240s adb wait-for-device; then
+            echo 'ADB did not become available within 240 seconds' >&2
+            tail -120 emulator-evidence/emulator-console.log >&2 || true
+            exit 1
+          fi
           booted=0
           for attempt in $(seq 1 180); do
             if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then booted=1; break; fi
