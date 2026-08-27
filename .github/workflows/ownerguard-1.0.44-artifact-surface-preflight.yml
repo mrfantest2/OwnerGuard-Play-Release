@@ -1,0 +1,170 @@
+name: OwnerGuard 1.0.44 Artifact Surface Preflight
+
+on:
+  push:
+    branches:
+      - release/1.0.44-play-pro-drive
+  pull_request:
+    branches:
+      - release/1.0.44-play-pro-drive
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ownerguard-1-0-44-artifact-surface-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  artifact-surface:
+    name: APK/AAB package, permissions, architecture and bundle validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout exact source commit
+        uses: actions/checkout@v6
+
+      - name: Configure Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+
+      - name: Reconstruct and build unsigned release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/prepare_release_1_0_44.py
+          chmod +x gradlew
+          ./gradlew clean assembleRelease bundleRelease --stacktrace --no-daemon
+          test -s app/build/outputs/apk/release/app-release-unsigned.apk || test -s app/build/outputs/apk/release/app-release.apk
+          test -s app/build/outputs/bundle/release/app-release.aab
+
+      - name: Validate package, version, SDK and permission surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact-surface-evidence
+          APK="$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -size +0c -print -quit)"
+          AAB=app/build/outputs/bundle/release/app-release.aab
+          test -n "${APK}" && test -s "${APK}" && test -s "${AAB}"
+
+          BUILD_TOOLS="$(ls -1 "${ANDROID_HOME}/build-tools" | sort -V | tail -1)"
+          AAPT="${ANDROID_HOME}/build-tools/${BUILD_TOOLS}/aapt"
+          test -x "${AAPT}"
+
+          "${AAPT}" dump badging "${APK}" | tee artifact-surface-evidence/apk-badging.txt
+          grep -q "package: name='com.fantest.ownerguard' versionCode='10044' versionName='1.0.44'" artifact-surface-evidence/apk-badging.txt
+          grep -q "targetSdkVersion:'36'" artifact-surface-evidence/apk-badging.txt
+
+          "${AAPT}" dump permissions "${APK}" | tee artifact-surface-evidence/apk-permissions.txt
+          for required in \
+            android.permission.CAMERA \
+            android.permission.USE_BIOMETRIC \
+            android.permission.POST_NOTIFICATIONS \
+            android.permission.FOREGROUND_SERVICE \
+            android.permission.FOREGROUND_SERVICE_CAMERA \
+            android.permission.FOREGROUND_SERVICE_DATA_SYNC \
+            android.permission.RECEIVE_BOOT_COMPLETED \
+            android.permission.WAKE_LOCK \
+            android.permission.ACCESS_COARSE_LOCATION \
+            android.permission.ACCESS_FINE_LOCATION \
+            android.permission.INTERNET \
+            android.permission.ACCESS_NETWORK_STATE \
+            com.android.vending.BILLING; do
+            grep -q "${required}" artifact-surface-evidence/apk-permissions.txt || {
+              echo "Required release permission missing: ${required}" >&2
+              exit 1
+            }
+          done
+
+          for forbidden in \
+            android.permission.REQUEST_INSTALL_PACKAGES \
+            android.permission.QUERY_ALL_PACKAGES \
+            android.permission.MANAGE_EXTERNAL_STORAGE \
+            android.permission.READ_SMS \
+            android.permission.SEND_SMS \
+            android.permission.READ_CALL_LOG \
+            android.permission.WRITE_CALL_LOG \
+            android.permission.SYSTEM_ALERT_WINDOW; do
+            if grep -q "${forbidden}" artifact-surface-evidence/apk-permissions.txt; then
+              echo "Forbidden Play-release permission present: ${forbidden}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Validate AAB structure and native architecture surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          import json
+          import zipfile
+
+          aab = Path('app/build/outputs/bundle/release/app-release.aab')
+          apk = next(Path('app/build/outputs/apk/release').glob('*.apk'))
+          evidence = Path('artifact-surface-evidence')
+          evidence.mkdir(exist_ok=True)
+
+          required_entries = {
+              'BundleConfig.pb',
+              'base/manifest/AndroidManifest.xml',
+              'base/dex/classes.dex',
+          }
+          with zipfile.ZipFile(aab) as zf:
+              bad = zf.testzip()
+              if bad is not None:
+                  raise SystemExit(f'AAB ZIP integrity failure at {bad}')
+              names = set(zf.namelist())
+              missing = sorted(required_entries - names)
+              if missing:
+                  raise SystemExit('AAB required entries missing: ' + ', '.join(missing))
+              native = sorted(name for name in names if name.startswith('base/lib/') and name.endswith('.so'))
+
+          with zipfile.ZipFile(apk) as zf:
+              bad = zf.testzip()
+              if bad is not None:
+                  raise SystemExit(f'APK ZIP integrity failure at {bad}')
+              apk_native = sorted(name for name in zf.namelist() if name.startswith('lib/') and name.endswith('.so'))
+
+          if native or apk_native:
+              raise SystemExit('Unexpected native library architecture payload detected in OwnerGuard release')
+
+          def sha256(path: Path) -> str:
+              h = hashlib.sha256()
+              with path.open('rb') as f:
+                  for chunk in iter(lambda: f.read(1024 * 1024), b''):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          result = {
+              'package': 'com.fantest.ownerguard',
+              'versionCode': 10044,
+              'versionName': '1.0.44',
+              'targetSdk': 36,
+              'architectureSurface': 'Java/Kotlin/Dex only; no packaged native .so libraries',
+              'aabZipIntegrity': 'PASS',
+              'apkZipIntegrity': 'PASS',
+              'apkSha256': sha256(apk),
+              'aabSha256': sha256(aab),
+          }
+          (evidence / 'artifact-surface.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
+          print(json.dumps(result, indent=2))
+          PY
+
+      - name: Upload artifact surface evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: OwnerGuard-1.0.44-Artifact-Surface-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifact-surface-evidence/
+          if-no-files-found: warn
+          retention-days: 90
