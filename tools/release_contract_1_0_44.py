@@ -44,6 +44,20 @@ REQUIRED = {
         "OwnerGuard Pro",
         "Google Play managed release",
         "Create an exact 6-digit OwnerGuard PIN",
+        "Open incident vault",
+        "Permissions & battery",
+        "PIN / password monitoring",
+    ),
+    "app/src/main/java/com/fantest/ownerguard/VaultActivity.java": (
+        "DEFAULT_PAGE_SIZE = 24",
+        "Select all filtered",
+        "Export this range",
+        "VaultExportManager.exportIncidents",
+    ),
+    "app/src/main/java/com/fantest/ownerguard/VaultExportManager.java": (
+        "evidence_manifest.csv",
+        "ZipOutputStream",
+        "VaultCrypto.decryptBytes",
     ),
     "app/src/main/java/com/fantest/ownerguard/CloudAuthActivity.java": (
         "REQUEST_CODE",
