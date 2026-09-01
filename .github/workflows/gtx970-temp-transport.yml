@@ -1,0 +1,34 @@
+name: GTX970 temporary recovery transport
+
+on:
+  push:
+    branches:
+      - ops/gtx970-transport-20260901
+    paths:
+      - ops/gtx970-kdt-peerbridge-recovery.zip.b64
+
+permissions:
+  contents: write
+
+jobs:
+  build-transport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode and verify bounded recovery ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d ops/gtx970-kdt-peerbridge-recovery.zip.b64 > ops/gtx970-kdt-peerbridge-recovery.zip
+          echo 'c22749a340d03a9e59100267a2c74c7b8a4e3f9082c126654b71274ec5fe9746  ops/gtx970-kdt-peerbridge-recovery.zip' | sha256sum -c -
+          unzip -t ops/gtx970-kdt-peerbridge-recovery.zip
+      - name: Publish temporary transport artifact on this branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f ops/gtx970-kdt-peerbridge-recovery.zip
+          git commit -m 'ops: publish temporary GTX970 recovery transport'
+          git push
