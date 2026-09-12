@@ -1,0 +1,81 @@
+name: MASTER-PC Find FantestADBMonitor Source
+
+on:
+  push:
+    branches: ["ops/masterpc-recovery-20260912"]
+    paths: [".github/workflows/masterpc-find-adb-source.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  find:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Search MASTER-PC through bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE='https://fantest.win/runner'
+          test "$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/api.php?action=ping")" = 200
+          curl -fsSL -c cookies.txt -b cookies.txt "$BASE/" -o runner.html
+          CSRF="$(python - <<'PY'
+          import re,json
+          t=open('runner.html',encoding='utf-8',errors='replace').read();m=re.search(r'window\.FANTESTOS_RUNNER_CSRF=(.*?);',t)
+          if not m: raise SystemExit('CSRF missing')
+          print(json.loads(m.group(1)))
+          PY
+          )"
+          cat > find.ps1 <<'PS1'
+          $ErrorActionPreference='SilentlyContinue'
+          $targets=New-Object System.Collections.Generic.List[string]
+          $roots=@('C:\Khalil','C:\FantestBuildHub','C:\ProgramData\Fantest','C:\actions-runner','C:\GitHubRunner','D:\MasterPC-ControlCenter','D:\FantestBuildHub','D:\GitHubRunner','D:\Repos','D:\Projects')
+          foreach($root in $roots){
+            if(Test-Path $root){
+              Write-Host "SEARCH_ROOT=$root"
+              Get-ChildItem -LiteralPath $root -Filter 'FantestADBMonitor.Windows.csproj' -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {[void]$targets.Add($_.FullName)}
+            }
+          }
+          $targets=@($targets|Sort-Object -Unique)
+          Write-Host "SOURCE_MATCH_COUNT=$($targets.Count)"
+          foreach($f in $targets){
+            Write-Host "SOURCE_CSPROJ=$f"
+            $repo=Split-Path -Parent $f
+            while($repo -and -not (Test-Path (Join-Path $repo '.git'))){$parent=Split-Path -Parent $repo;if($parent -eq $repo){break};$repo=$parent}
+            if($repo -and (Test-Path (Join-Path $repo '.git'))){
+              Write-Host "SOURCE_REPO=$repo"
+              $git=(Get-Command git.exe -ErrorAction SilentlyContinue).Source
+              if(-not $git){$git=(Get-Command git -ErrorAction SilentlyContinue).Source}
+              if($git){
+                & $git -C $repo status --porcelain=v1 --branch
+                & $git -C $repo rev-parse HEAD
+                & $git -C $repo remote -v | ForEach-Object { if($_ -match '^(\S+)\s+(https?://)([^@/]+@)?(.+)$'){Write-Host ($Matches[1]+' '+$Matches[2]+$Matches[4])}else{Write-Host $_} }
+              }
+            }
+          }
+          $installed='C:\Program Files\FantestADBMonitor\FantestADBMonitor.exe'
+          Write-Host "INSTALLED_EXE=$(Test-Path $installed)"
+          if(Test-Path $installed){$i=Get-Item $installed;Write-Host "INSTALLED_SIZE=$($i.Length) UTC=$($i.LastWriteTimeUtc.ToString('o'))"}
+          $dotnet=(Get-Command dotnet.exe -ErrorAction SilentlyContinue).Source
+          Write-Host "DOTNET=$dotnet"
+          if($dotnet){& $dotnet --info | Select-Object -First 18}
+          Write-Host 'SOURCE_SEARCH=PASS'
+          PS1
+          curl -fsS -b cookies.txt -c cookies.txt -X POST "$BASE/api.php" --data-urlencode 'action=start' --data-urlencode "csrf=$CSRF" --data-urlencode 'runtime=powershell' --data-urlencode 'execution_mode=background' --data-urlencode 'working_directory=C:\' --data-urlencode 'timeout=240' --data-urlencode 'command@find.ps1' -o start.json
+          JOB_ID="$(python - <<'PY'
+          import json
+          d=json.load(open('start.json'));assert d.get('ok') and d.get('job_id');print(d['job_id'])
+          PY
+          )"
+          out=0;err=0;:>stdout.log;:>stderr.log;final=''
+          for i in $(seq 1 90);do
+            curl -fsS -b cookies.txt -c cookies.txt "$BASE/api.php?action=status&csrf=$CSRF&job_id=$JOB_ID&out_offset=$out&err_offset=$err" -o status.json
+            python - <<'PY' > p.env
+          import json,shlex
+          d=json.load(open('status.json'));print('STATUS='+shlex.quote(str(d.get('status',''))));print('OUT='+str(int(d.get('out_offset',0))));print('ERR='+str(int(d.get('err_offset',0))));open('o','wb').write(str(d.get('stdout_chunk','')).encode());open('e','wb').write(str(d.get('stderr_chunk','')).encode())
+          PY
+            . ./p.env;out=$OUT;err=$ERR;cat o >>stdout.log;cat e >>stderr.log
+            case "$STATUS" in completed|failed|cancelled|timed_out|output_limited)final="$STATUS";break;;esac;sleep 2
+          done
+          cat stdout.log;cat stderr.log >&2 || true;echo "FINAL=$final";test "$final" = completed;grep -q 'SOURCE_SEARCH=PASS' stdout.log
