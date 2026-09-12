@@ -1,0 +1,163 @@
+name: MASTER-PC Recovery Diagnose
+
+on:
+  push:
+    branches: ["ops/masterpc-recovery-20260912"]
+    paths: [".github/workflows/masterpc-recovery-diagnose.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Diagnose MASTER-PC via FantestOS bridge
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE='https://fantest.win/runner'
+          code="$(curl -sS -o ping.json -w '%{http_code}' "$BASE/api.php?action=ping")"
+          echo "BRIDGE_PING_HTTP=$code"
+          cat ping.json || true
+          test "$code" = 200
+
+          curl -fsSL -c cookies.txt -b cookies.txt "$BASE/" -o runner.html
+          CSRF="$(python - <<'PY'
+          import re,json
+          t=open('runner.html',encoding='utf-8',errors='replace').read()
+          m=re.search(r'window\.FANTESTOS_RUNNER_CSRF=(.*?);',t)
+          if not m: raise SystemExit('CSRF marker missing')
+          print(json.loads(m.group(1)))
+          PY
+          )"
+          test -n "$CSRF"
+
+          cat > diag.ps1 <<'PS1'
+          $ErrorActionPreference='Continue'
+          function H([string]$x){Write-Host "`n===== $x ====="}
+          H 'IDENTITY'
+          whoami
+          Write-Host "HOST=$env:COMPUTERNAME"
+          Get-Date -Format o
+
+          H 'ACTIONS RUNNER SERVICES'
+          $services=@(Get-CimInstance Win32_Service | Where-Object {$_.Name -like 'actions.runner.*'} | Sort-Object Name)
+          Write-Host "RUNNER_SERVICE_COUNT=$($services.Count)"
+          foreach($s in $services){
+            Write-Host "SERVICE name=$($s.Name) display=$($s.DisplayName) state=$($s.State) start=$($s.StartMode) account=$($s.StartName) pid=$($s.ProcessId)"
+            Write-Host "PATH=$($s.PathName)"
+            $path=[string]$s.PathName
+            $m=[regex]::Match($path,'^\s*"?([^\"]+RunnerService\.exe)')
+            if($m.Success){
+              $root=Split-Path -Parent $m.Groups[1].Value
+              Write-Host "ROOT=$root"
+              $cfg=Join-Path $root '.runner'
+              if(Test-Path $cfg){
+                try{
+                  $j=Get-Content $cfg -Raw|ConvertFrom-Json
+                  Write-Host "RUNNERCFG agentName=$($j.agentName) poolName=$($j.poolName) workFolder=$($j.workFolder) serverUrl=$($j.serverUrl)"
+                }catch{Write-Host "RUNNERCFG_ERROR=$($_.Exception.Message)"}
+              }else{Write-Host 'RUNNERCFG=MISSING'}
+            }
+          }
+
+          H 'RUNNER PROCESSES'
+          Get-CimInstance Win32_Process | Where-Object {$_.Name -in @('Runner.Listener.exe','Runner.Worker.exe','RunnerService.exe')} | Select-Object ProcessId,ParentProcessId,Name,CommandLine | Format-List
+
+          H 'SCHEDULED TASKS'
+          Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {$_.TaskName -match '(?i)(fantest|runner|github|ccc|termux|master.?pc|opencode)'} | Select-Object TaskName,State | Sort-Object TaskName | Format-Table -AutoSize
+
+          H 'LOCAL PORTS'
+          foreach($port in @(80,4096,8766,8784,8787,8793)){
+            $c=New-Object Net.Sockets.TcpClient
+            try{
+              $a=$c.BeginConnect('127.0.0.1',$port,$null,$null)
+              $ok=$a.AsyncWaitHandle.WaitOne(900)
+              if($ok){$c.EndConnect($a)}
+              Write-Host "PORT $port LISTEN=$ok"
+            }catch{Write-Host "PORT $port LISTEN=False ERR=$($_.Exception.Message)"}finally{$c.Dispose()}
+          }
+
+          H 'LOCAL HTTP'
+          foreach($u in @('http://127.0.0.1/masterpc/','http://127.0.0.1:8784/api/v1/health','http://127.0.0.1:8766/api/status','http://127.0.0.1:4096/')){
+            try{
+              $r=Invoke-WebRequest $u -UseBasicParsing -TimeoutSec 6
+              Write-Host "HTTP $u status=$($r.StatusCode) bytes=$($r.Content.Length)"
+            }catch{Write-Host "HTTP $u ERROR=$($_.Exception.Message)"}
+          }
+
+          H 'MASTERPC FILES'
+          foreach($p in @('C:\xampp\htdocs\masterpc\index.php','C:\xampp\private\masterpc-control\snapshot.json','C:\xampp\private\masterpc-control\audit.jsonl')){
+            if(Test-Path $p){$i=Get-Item $p;Write-Host "FILE $p size=$($i.Length) utc=$($i.LastWriteTimeUtc.ToString('o'))"}else{Write-Host "MISSING $p"}
+          }
+          if(Test-Path 'C:\xampp\htdocs\masterpc\index.php'){
+            $php='C:\xampp\php\php.exe'
+            if(Test-Path $php){& $php -l 'C:\xampp\htdocs\masterpc\index.php'}
+          }
+
+          H 'SNAPSHOT'
+          if(Test-Path 'C:\xampp\private\masterpc-control\snapshot.json'){
+            try{
+              $s=Get-Content 'C:\xampp\private\masterpc-control\snapshot.json' -Raw|ConvertFrom-Json
+              Write-Host "generated=$($s.generated_at) runner_online=$($s.runner.online) runner_busy=$($s.runner.busy)"
+              foreach($x in @($s.runner.services)){Write-Host "SNAPSHOT_SERVICE $($x.name) state=$($x.state) pid=$($x.process_id)"}
+              Write-Host "counts=$($s.counts|ConvertTo-Json -Compress)"
+              Write-Host "errors=$(@($s.errors)-join ' | ')"
+            }catch{Write-Host "SNAPSHOT_ERROR=$($_.Exception.Message)"}
+          }
+
+          H 'GITHUB NETWORK'
+          try{$t=Test-NetConnection api.github.com -Port 443 -WarningAction SilentlyContinue;Write-Host "GITHUB443=$($t.TcpTestSucceeded) remote=$($t.RemoteAddress)"}catch{Write-Host "GITHUB_NET_ERROR=$($_.Exception.Message)"}
+
+          H 'TERMUX WATCHDOG'
+          foreach($n in @('Fantest Termux Edge Worker - master_pc','Fantest Termux Edge Watchdog - master_pc','Fantest OpenCode Watchdog')){
+            $t=Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
+            if($t){Write-Host "TASK $n state=$($t.State)"}else{Write-Host "TASK $n MISSING"}
+          }
+          Write-Host 'MASTERPC_BRIDGE_DIAGNOSTIC=PASS'
+          PS1
+
+          curl -fsS -b cookies.txt -c cookies.txt -X POST "$BASE/api.php" \
+            --data-urlencode 'action=start' \
+            --data-urlencode "csrf=$CSRF" \
+            --data-urlencode 'runtime=powershell' \
+            --data-urlencode 'execution_mode=background' \
+            --data-urlencode 'working_directory=C:\' \
+            --data-urlencode 'timeout=240' \
+            --data-urlencode 'command@diag.ps1' -o start.json
+          cat start.json; echo
+          JOB_ID="$(python - <<'PY'
+          import json
+          d=json.load(open('start.json'))
+          if not d.get('ok') or not d.get('job_id'): raise SystemExit('queue failed')
+          print(d['job_id'])
+          PY
+          )"
+
+          out=0; err=0; :>stdout.log; :>stderr.log; final=''
+          for i in $(seq 1 90); do
+            curl -fsS -b cookies.txt -c cookies.txt "$BASE/api.php?action=status&csrf=$CSRF&job_id=$JOB_ID&out_offset=$out&err_offset=$err" -o status.json
+            python - <<'PY' > parsed.env
+          import json,shlex
+          d=json.load(open('status.json'))
+          print('STATUS='+shlex.quote(str(d.get('status',''))))
+          print('OUT_OFFSET='+str(int(d.get('out_offset',0))))
+          print('ERR_OFFSET='+str(int(d.get('err_offset',0))))
+          open('chunk-out','wb').write(str(d.get('stdout_chunk','')).encode())
+          open('chunk-err','wb').write(str(d.get('stderr_chunk','')).encode())
+          PY
+            . ./parsed.env
+            out=$OUT_OFFSET; err=$ERR_OFFSET
+            cat chunk-out >>stdout.log; cat chunk-err >>stderr.log
+            echo "poll=$i status=$STATUS out=$out err=$err"
+            case "$STATUS" in completed|failed|cancelled|timed_out|output_limited) final="$STATUS"; break;; esac
+            sleep 2
+          done
+          echo '=== MASTER-PC STDOUT ==='; cat stdout.log || true
+          echo '=== MASTER-PC STDERR ==='; cat stderr.log || true
+          echo "FINAL=$final"
+          test "$final" = completed
+          grep -q 'MASTERPC_BRIDGE_DIAGNOSTIC=PASS' stdout.log
