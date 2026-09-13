@@ -27,10 +27,17 @@ android {
     }
 }
 
-// Stable OwnerGuard signing key for direct personal APK updates.
-// This SHA-256 fingerprint is public certificate metadata from the verified
-// OwnerGuard 1.0.42 production release; it is not secret key material.
+// OwnerGuard has two legitimate signing identities when Google Play App Signing is enabled:
+// 1) the historical/app-signing certificate used on Play-distributed installs, and
+// 2) the separate Play upload certificate used only to authenticate uploads to Google Play.
+// The historical fingerprint remains pinned in source. The upload fingerprint must be supplied
+// by the protected release environment as EXPECTED_UPLOAD_CERT_SHA256; an unset value does not
+// broaden trust and therefore keeps direct/local signing restricted to the historical identity.
 def OWNERGUARD_HISTORICAL_SIGNING_CERT_SHA256 = 'BC2E0B8928F9D9F981DB1AF5595D0168D54F73FC9A7AB52D8CED6AD0E5979C9E'
+def normalizeCertSha256 = { value ->
+    (value ?: '').toString().toUpperCase().replaceAll(/[^0-9A-F]/, '')
+}
+def expectedPlayUploadCertSha256 = normalizeCertSha256(System.getenv('EXPECTED_UPLOAD_CERT_SHA256'))
 def signingProps = new Properties()
 def signingFile = rootProject.file('signing/keystore.properties')
 if (signingFile.exists()) {
@@ -62,8 +69,9 @@ if (signingFile.exists()) {
         .digest(signingCertificate.encoded)
         .collect { byteValue -> String.format('%02X', ((byteValue as int) & 0xFF)) }
         .join()
-    if (actualSigningCertSha256 != OWNERGUARD_HISTORICAL_SIGNING_CERT_SHA256) {
-        throw new GradleException('OwnerGuard signing certificate fingerprint mismatch; refusing to sign with a different identity.')
+    def matchesProtectedPlayUploadCert = expectedPlayUploadCertSha256 && actualSigningCertSha256 == expectedPlayUploadCertSha256
+    if (actualSigningCertSha256 != OWNERGUARD_HISTORICAL_SIGNING_CERT_SHA256 && !matchesProtectedPlayUploadCert) {
+        throw new GradleException('OwnerGuard signing certificate fingerprint mismatch; refusing to sign with an identity that is neither the pinned app-signing certificate nor the protected Play upload certificate.')
     }
 
     android.signingConfigs {
