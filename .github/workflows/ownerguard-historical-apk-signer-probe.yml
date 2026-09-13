@@ -1,0 +1,61 @@
+name: OwnerGuard Historical APK Signer Probe
+
+on:
+  push:
+    branches:
+      - ops/verify-ownerguard-upload-signer-20260913
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-historical-apk-signer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install apksigner
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager 'build-tools;36.0.0' >/dev/null
+
+      - name: Download and authenticate historical OwnerGuard APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="$RUNNER_TEMP/OwnerGuard-1.0.30.apk"
+          url='https://ki.fantest.win/ownerguard_cloud/releases/OwnerGuard-1.0.30.apk'
+          expected_sha='b48cd0964906de3c62970b0e4904b2cc3309d27c9a67e077eb0534f547b407b7'
+          expected_size='5471511'
+
+          curl --fail --location --silent --show-error --retry 3 --retry-delay 2 "$url" --output "$apk"
+          actual_sha="$(sha256sum "$apk" | awk '{print $1}')"
+          actual_size="$(stat -c '%s' "$apk")"
+
+          echo "APK_SHA256=$actual_sha"
+          echo "APK_SIZE=$actual_size"
+          [[ "$actual_sha" == "$expected_sha" ]]
+          [[ "$actual_size" == "$expected_size" ]]
+
+      - name: Print public signing certificate fingerprint only
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk="$RUNNER_TEMP/OwnerGuard-1.0.30.apk"
+          signer="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          certs="$RUNNER_TEMP/ownerguard-certs.txt"
+
+          "$signer" verify --print-certs "$apk" | tee "$certs"
+          fingerprint="$(awk -F': ' '/Signer #1 certificate SHA-256 digest:/{print toupper($2); exit}' "$certs" | tr -d ':[:space:]')"
+          [[ "$fingerprint" =~ ^[0-9A-F]{64}$ ]]
+
+          echo "OWNERGUARD_HISTORICAL_APK_CERT_SHA256=$fingerprint"
+          echo "OWNERGUARD_HISTORICAL_APK_CERT_SHORT=${fingerprint:0:4}...${fingerprint: -4}"
+          if [[ "${fingerprint:0:4}" == '7274' && "${fingerprint: -4}" == '4380' ]]; then
+            echo 'MATCHES_EXPECTED_UPLOAD_KEY_SHORT=true'
+          else
+            echo 'MATCHES_EXPECTED_UPLOAD_KEY_SHORT=false'
+          fi
