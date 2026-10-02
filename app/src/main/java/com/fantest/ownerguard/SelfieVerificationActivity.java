@@ -6,7 +6,7 @@ import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.ImageFormat;
-import android.graphics.PointF;
+import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -15,7 +15,6 @@ import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.StreamConfigurationMap;
-import android.media.FaceDetector;
 import android.media.Image;
 import android.media.ImageReader;
 import android.os.Bundle;
@@ -42,6 +41,11 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
+import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.face.Face;
+import com.google.mlkit.vision.face.FaceDetection;
+import com.google.mlkit.vision.face.FaceDetectorOptions;
+
 public class SelfieVerificationActivity extends SecureActivity {
     private static final int REQUIRED_FRAMES = 3;
 
@@ -60,7 +64,9 @@ public class SelfieVerificationActivity extends SecureActivity {
     private int sensorOrientation = 270;
     private int stable;
     private boolean capturing;
+    private boolean faceDetectionBusy;
     private int completedFrames;
+    private com.google.mlkit.vision.face.FaceDetector mlFaceDetector;
     private final List<FaceSimilarity.Result> frameResults = new ArrayList<>();
 
     private final Runnable analyzer = new Runnable() {
@@ -88,6 +94,13 @@ public class SelfieVerificationActivity extends SecureActivity {
             finish();
             return;
         }
+        mlFaceDetector = FaceDetection.getClient(new FaceDetectorOptions.Builder()
+                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+                .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
+                .setMinFaceSize(0.10f)
+                .enableTracking()
+                .build());
         manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
         build();
     }
@@ -262,42 +275,53 @@ public class SelfieVerificationActivity extends SecureActivity {
     }
 
     private void analyze() {
-        Bitmap bitmap = null;
-        Bitmap rgb = null;
-        try {
-            bitmap = preview.getBitmap(360, 480);
-            if (bitmap == null) return;
-            rgb = bitmap.copy(Bitmap.Config.RGB_565, false);
-            FaceDetector.Face[] faces = new FaceDetector.Face[1];
-            int found = new FaceDetector(rgb.getWidth(), rgb.getHeight(), 1).findFaces(rgb, faces);
-            if (found < 1 || faces[0] == null) {
-                stable = 0;
-                status.setText("No face detected — face the camera directly");
-                return;
-            }
-            PointF midpoint = new PointF();
-            faces[0].getMidPoint(midpoint);
-            float x = midpoint.x / rgb.getWidth();
-            float y = midpoint.y / rgb.getHeight();
-            float ratio = faces[0].eyesDistance() / rgb.getWidth();
-            boolean good = x > 0.20f && x < 0.80f
-                    && y > 0.18f && y < 0.80f
-                    && ratio > 0.050f && ratio < 0.34f;
-            if (!good) {
-                stable = 0;
-                status.setText("Center your face and adjust the distance");
-                return;
-            }
-            stable++;
-            status.setText("Clear face — sample " + (completedFrames + 1) + " of " + REQUIRED_FRAMES
-                    + " in " + Math.max(1, 2 - stable));
-            if (stable >= 2) capture();
-        } catch (Throwable ignored) {
-            stable = 0;
-        } finally {
-            if (rgb != null && !rgb.isRecycled()) rgb.recycle();
-            if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
-        }
+        if (faceDetectionBusy || mlFaceDetector == null) return;
+        final Bitmap bitmap = preview.getBitmap(360, 480);
+        if (bitmap == null) return;
+
+        faceDetectionBusy = true;
+        mlFaceDetector.process(InputImage.fromBitmap(bitmap, 0))
+                .addOnSuccessListener(faces -> {
+                    if (isFinishing() || capturing || completedFrames >= REQUIRED_FRAMES) return;
+                    if (faces == null || faces.isEmpty()) {
+                        stable = 0;
+                        status.setText("No face detected — face the camera directly");
+                        return;
+                    }
+                    if (faces.size() != 1) {
+                        stable = 0;
+                        status.setText("Only one face should be visible");
+                        return;
+                    }
+
+                    Face face = faces.get(0);
+                    Rect bounds = face.getBoundingBox();
+                    float x = bounds.exactCenterX() / Math.max(1f, bitmap.getWidth());
+                    float y = bounds.exactCenterY() / Math.max(1f, bitmap.getHeight());
+                    float ratio = (bounds.width() / Math.max(1f, bitmap.getWidth())) / 2.35f;
+                    boolean good = x > 0.20f && x < 0.80f
+                            && y > 0.18f && y < 0.80f
+                            && ratio > 0.050f && ratio < 0.34f
+                            && Math.abs(face.getHeadEulerAngleZ()) <= 20f;
+                    if (!good) {
+                        stable = 0;
+                        status.setText("Center your face, keep your head upright, and adjust the distance");
+                        return;
+                    }
+
+                    stable++;
+                    status.setText("Clear face — sample " + (completedFrames + 1) + " of " + REQUIRED_FRAMES
+                            + " in " + Math.max(1, 2 - stable));
+                    if (stable >= 2) capture();
+                })
+                .addOnFailureListener(error -> {
+                    stable = 0;
+                    status.setText("Face detector unavailable — hold still and retry");
+                })
+                .addOnCompleteListener(task -> {
+                    faceDetectionBusy = false;
+                    if (!bitmap.isRecycled()) bitmap.recycle();
+                });
     }
 
     private void capture() {
@@ -435,6 +459,10 @@ public class SelfieVerificationActivity extends SecureActivity {
 
     @Override protected void onDestroy() {
         closeCamera();
+        if (mlFaceDetector != null) {
+            try { mlFaceDetector.close(); } catch (Exception ignored) {}
+            mlFaceDetector = null;
+        }
         super.onDestroy();
     }
 
