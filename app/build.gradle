@@ -10,8 +10,8 @@ android {
         applicationId 'com.fantest.ownerguard'
         minSdk 28
         targetSdk 35
-        versionCode 10027
-        versionName '1.0.27'
+        versionCode 10045
+        versionName '1.0.45'
     }
 
     compileOptions {
@@ -88,4 +88,5 @@ if (signingFile.exists()) {
 
 dependencies {
     implementation 'androidx.work:work-runtime:2.10.3'
+    implementation 'com.google.mlkit:face-detection:16.1.7'
 }
