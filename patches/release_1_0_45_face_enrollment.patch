@@ -1,0 +1,527 @@
+--- a/app/build.gradle
++++ b/app/build.gradle
+@@ -10,8 +10,8 @@
+         applicationId 'com.fantest.ownerguard'
+         minSdk 28
+         targetSdk 36
+-        versionCode 10044
+-        versionName '1.0.44'
++        versionCode 10045
++        versionName '1.0.45'
+     }
+ 
+     compileOptions {
+@@ -89,4 +89,5 @@
+ dependencies {
+     implementation 'com.android.billingclient:billing:9.1.0'
+     implementation 'androidx.work:work-runtime:2.10.3'
++    implementation 'com.google.mlkit:face-detection:16.1.7'
+ }
+--- a/app/src/main/java/com/fantest/ownerguard/EnrollmentActivity.java
++++ b/app/src/main/java/com/fantest/ownerguard/EnrollmentActivity.java
+@@ -15,6 +15,7 @@
+ import android.graphics.Matrix;
+ import android.graphics.Paint;
+ import android.graphics.PointF;
++import android.graphics.Rect;
+ import android.graphics.RectF;
+ import android.graphics.SurfaceTexture;
+ import android.graphics.drawable.GradientDrawable;
+@@ -26,7 +27,6 @@
+ import android.hardware.camera2.CaptureRequest;
+ import android.hardware.camera2.params.StreamConfigurationMap;
+ import android.media.AudioManager;
+-import android.media.FaceDetector;
+ import android.media.Image;
+ import android.media.ImageReader;
+ import android.media.ToneGenerator;
+@@ -52,8 +52,14 @@
+ 
+ import java.nio.ByteBuffer;
+ import java.util.Arrays;
++import java.util.List;
+ import java.util.Locale;
+ 
++import com.google.mlkit.vision.common.InputImage;
++import com.google.mlkit.vision.face.Face;
++import com.google.mlkit.vision.face.FaceDetection;
++import com.google.mlkit.vision.face.FaceDetectorOptions;
++
+ public class EnrollmentActivity extends SecureActivity {
+     private static final String BG = "#07111F";
+     private static final String SURFACE = "#10213A";
+@@ -120,8 +126,10 @@
+     private boolean enrollmentReset;
+     private boolean enrollmentCompleted;
+     private boolean analysisRunning;
++    private boolean faceDetectionBusy;
+     private long cooldownUntil;
+     private LiveFace lastLiveFace;
++    private com.google.mlkit.vision.face.FaceDetector mlFaceDetector;
+     private volatile Bitmap pendingEnrollmentPreview;
+ 
+     private final Runnable faceLoop = new Runnable() {
+@@ -153,6 +161,13 @@
+                 if (voiceReady && enrollmentReset) speak(POSE_TITLES[poseIndex] + ". " + POSE_HINTS[poseIndex], true);
+             }
+         });
++        mlFaceDetector = FaceDetection.getClient(new FaceDetectorOptions.Builder()
++                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
++                .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
++                .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
++                .setMinFaceSize(0.12f)
++                .enableTracking()
++                .build());
+         cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+         buildUi();
+         new AlertDialog.Builder(this)
+@@ -365,46 +380,52 @@
+     }
+ 
+     private void analyzeLivePreview() {
+-        Bitmap bitmap = null;
+-        try {
+-            bitmap = preview.getBitmap(360, 480);
+-            if (bitmap == null) return;
+-            LiveFace face = detectLiveFace(bitmap);
+-            lastLiveFace = face;
+-            applyLiveFace(face);
+-        } catch (Throwable ignored) {
+-            stableFrames = 0;
+-        } finally {
+-            if (bitmap != null) bitmap.recycle();
+-        }
++        if (faceDetectionBusy || mlFaceDetector == null) return;
++        final Bitmap bitmap = preview.getBitmap(360, 480);
++        if (bitmap == null) return;
++
++        faceDetectionBusy = true;
++        mlFaceDetector.process(InputImage.fromBitmap(bitmap, 0))
++                .addOnSuccessListener(faces -> {
++                    if (!analysisRunning || isFinishing()) return;
++                    LiveFace face = detectLiveFace(bitmap, faces);
++                    lastLiveFace = face;
++                    applyLiveFace(face);
++                })
++                .addOnFailureListener(error -> {
++                    if (!analysisRunning || isFinishing()) return;
++                    stableFrames = 0;
++                    lastLiveFace = LiveFace.none("Face detector unavailable. Hold the phone steady and try again.");
++                    applyLiveFace(lastLiveFace);
++                })
++                .addOnCompleteListener(task -> {
++                    faceDetectionBusy = false;
++                    if (!bitmap.isRecycled()) bitmap.recycle();
++                });
+     }
+ 
+-    private LiveFace detectLiveFace(Bitmap source) {
+-        Bitmap rgb565 = source.copy(Bitmap.Config.RGB_565, false);
+-        if (rgb565 == null) return LiveFace.none("Preparing face detector…");
+-        FaceDetector.Face[] faces = new FaceDetector.Face[1];
+-        int count;
+-        try {
+-            count = new FaceDetector(rgb565.getWidth(), rgb565.getHeight(), 1).findFaces(rgb565, faces);
+-        } catch (Throwable t) {
+-            rgb565.recycle();
+-            return LiveFace.none("Face detector unavailable");
+-        }
+-        if (count < 1 || faces[0] == null) {
+-            rgb565.recycle();
++    private LiveFace detectLiveFace(Bitmap source, List<Face> faces) {
++        if (faces == null || faces.isEmpty()) {
+             return LiveFace.none("Place your face inside the oval");
+         }
+-        FaceDetector.Face f = faces[0];
+-        PointF mid = new PointF(); f.getMidPoint(mid);
+-        float eye = f.eyesDistance();
+-        float nx = mid.x / Math.max(1f, rgb565.getWidth());
+-        float ny = mid.y / Math.max(1f, rgb565.getHeight());
+-        float ratio = eye / Math.max(1f, rgb565.getWidth());
+-        float yaw = safePose(f, FaceDetector.Face.EULER_Y);
+-        float pitch = safePose(f, FaceDetector.Face.EULER_X);
+-        float roll = safePose(f, FaceDetector.Face.EULER_Z);
+-        double brightness = sampleBrightness(rgb565);
+-        rgb565.recycle();
++        if (faces.size() != 1) {
++            return new LiveFace(true, false, 0.5f, 0.45f, 0.17f,
++                    0f, 0f, 0f, sampleBrightness(source),
++                    "Only one face should be visible during enrollment");
++        }
++
++        Face face = faces.get(0);
++        Rect bounds = face.getBoundingBox();
++        float width = Math.max(1f, source.getWidth());
++        float height = Math.max(1f, source.getHeight());
++        float nx = bounds.exactCenterX() / width;
++        float ny = bounds.exactCenterY() / height;
++        float ratio = (bounds.width() / width) / 2.35f;
++        float yaw = face.getHeadEulerAngleY();
++        float pitch = face.getHeadEulerAngleX();
++        float roll = face.getHeadEulerAngleZ();
++        double brightness = sampleBrightness(source);
++
+         boolean centered = nx > 0.31f && nx < 0.69f && ny > 0.29f && ny < 0.66f;
+         if (ratio < 0.085f) return new LiveFace(true, false, nx, ny, ratio, yaw, pitch, roll, brightness, "Move closer");
+         if (ratio > 0.245f) return new LiveFace(true, false, nx, ny, ratio, yaw, pitch, roll, brightness, "Move slightly farther away");
+@@ -416,10 +437,6 @@
+         return new LiveFace(true, check.ready, nx, ny, ratio, yaw, pitch, roll, brightness, check.message);
+     }
+ 
+-    private float safePose(FaceDetector.Face face, int axis) {
+-        try { return face.pose(axis); } catch (Throwable ignored) { return 0f; }
+-    }
+-
+     private double sampleBrightness(Bitmap b) {
+         long sum = 0; int count = 0;
+         int stepX = Math.max(1, b.getWidth() / 24);
+@@ -559,10 +576,9 @@
+             byte[] bytes = new byte[buffer.remaining()]; buffer.get(bytes);
+             Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+             if (bitmap == null) throw new IllegalStateException("Front-camera JPEG could not be decoded");
+-            Bitmap upright = rotate(bitmap, jpegOrientation());
+-            if (upright != bitmap) bitmap.recycle();
+-            bitmap = upright;
+             String pose = POSE_NAMES[Math.min(capturePoseIndex, POSE_NAMES.length - 1)];
++            // FaceSimilarity checks common camera rotations. Do not rotate the decoded
++            // JPEG a second time because Samsung devices may already apply JPEG_ORIENTATION.
+             FaceSimilarity.EnrollmentResult stillResult = FaceSimilarity.enrollGuided(this, bitmap, pose);
+             bitmap.recycle();
+             Bitmap previewFallback = pendingEnrollmentPreview;
+@@ -754,6 +770,7 @@
+         mainHandler.removeCallbacks(faceLoop);
+         if (tones != null) { try { tones.release(); } catch (Exception ignored) {} tones = null; }
+         if (voice != null) { try { voice.stop(); voice.shutdown(); } catch (Exception ignored) {} voice = null; }
++        if (mlFaceDetector != null) { try { mlFaceDetector.close(); } catch (Exception ignored) {} mlFaceDetector = null; }
+         if (isFinishing() && enrollmentReset && !enrollmentCompleted) FaceSimilarity.clear(this);
+         if (guideView != null) guideView.stopAnimation();
+         super.onDestroy();
+--- a/app/src/main/java/com/fantest/ownerguard/FaceSimilarity.java
++++ b/app/src/main/java/com/fantest/ownerguard/FaceSimilarity.java
+@@ -6,8 +6,8 @@
+ import android.graphics.BitmapFactory;
+ import android.graphics.Matrix;
+ import android.graphics.PointF;
++import android.graphics.Rect;
+ import android.media.ExifInterface;
+-import android.media.FaceDetector;
+ import android.util.Base64;
+ 
+ import java.io.File;
+@@ -15,6 +15,14 @@
+ import java.util.Arrays;
+ import java.util.Collections;
+ import java.util.List;
++import java.util.concurrent.TimeUnit;
++
++import com.google.android.gms.tasks.Tasks;
++import com.google.mlkit.vision.common.InputImage;
++import com.google.mlkit.vision.face.Face;
++import com.google.mlkit.vision.face.FaceDetection;
++import com.google.mlkit.vision.face.FaceDetectorOptions;
++import com.google.mlkit.vision.face.FaceLandmark;
+ 
+ /**
+  * Lightweight offline owner-similarity signal.
+@@ -31,6 +39,13 @@
+     private static final String OWNER_POSE = "owner_face_pose_";
+     private static final int N = 32;
+     static final int MAX_SAMPLES = 5;
++    private static final com.google.mlkit.vision.face.FaceDetector ML_FACE_DETECTOR =
++            FaceDetection.getClient(new FaceDetectorOptions.Builder()
++                    .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
++                    .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
++                    .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
++                    .setMinFaceSize(0.10f)
++                    .build());
+     private static final int[] ENROLLMENT_ORIENTATIONS = new int[]{0, 90, 270, 180};
+ 
+     static final class Result {
+@@ -305,25 +320,38 @@
+     }
+ 
+     private static DescriptorData descriptor(Bitmap source, boolean strictEnrollment) {
+-        FaceFrame frame = detect(source);
+-        if (frame == null) {
+-            return new DescriptorData(null,
+-                    "No clear face detected. Keep your full face inside the guide and look toward the camera.");
+-        }
+-        float ratio = frame.eye / Math.max(1f, frame.bitmap.getWidth());
+-        if (strictEnrollment && ratio < 0.060f) {
++        if (source == null) return new DescriptorData(null, "No image was captured. Try again.");
++
++        String lastError = "No clear face detected. Keep your full face inside the guide and look toward the camera.";
++        int[] rotations = new int[]{0, 90, 270, 180};
++        for (int degrees : rotations) {
++            Bitmap oriented = degrees == 0 ? source : rotateCopy(source, degrees);
++            if (oriented == null) continue;
++            FaceFrame frame = detect(oriented);
++            if (degrees != 0 && oriented != source && !oriented.isRecycled()) oriented.recycle();
++            if (frame == null) continue;
++
++            float ratio = frame.eye / Math.max(1f, frame.bitmap.getWidth());
++            if (strictEnrollment && ratio < 0.060f) {
++                frame.bitmap.recycle();
++                lastError = "Move closer. Your face is too small for a secure enrollment sample.";
++                continue;
++            }
++
++            Bitmap crop = cropFace(frame, 4.40f, 0.42f);
+             frame.bitmap.recycle();
+-            return new DescriptorData(null, "Move closer. Your face is too small for a secure enrollment sample.");
++            if (crop == null || crop.getWidth() < 96) {
++                if (crop != null) crop.recycle();
++                lastError = "Move closer and keep your face centered.";
++                continue;
++            }
++
++            DescriptorData result = normalizeCrop(crop, strictEnrollment);
++            crop.recycle();
++            if (result.bytes != null) return result;
++            lastError = result.error;
+         }
+-        Bitmap crop = cropFace(frame, 4.40f, 0.42f);
+-        frame.bitmap.recycle();
+-        if (crop == null || crop.getWidth() < 96) {
+-            if (crop != null) crop.recycle();
+-            return new DescriptorData(null, "Move closer and keep your face centered.");
+-        }
+-        DescriptorData result = normalizeCrop(crop, strictEnrollment);
+-        crop.recycle();
+-        return result;
++        return new DescriptorData(null, lastError);
+     }
+ 
+     private static FaceFrame detect(Bitmap source) {
+@@ -336,21 +364,47 @@
+                     Math.max(2, Math.round(source.getWidth() * scale)),
+                     Math.max(2, Math.round(source.getHeight() * scale)), true);
+         }
+-        Bitmap rgb565 = working.copy(Bitmap.Config.RGB_565, false);
+-        if (working != source) working.recycle();
+-        if (rgb565 == null) return null;
+-        FaceDetector.Face[] faces = new FaceDetector.Face[1];
++
+         try {
+-            int found = new FaceDetector(rgb565.getWidth(), rgb565.getHeight(), 1).findFaces(rgb565, faces);
+-            if (found < 1 || faces[0] == null) {
+-                rgb565.recycle();
++            List<Face> faces = Tasks.await(
++                    ML_FACE_DETECTOR.process(InputImage.fromBitmap(working, 0)),
++                    3, TimeUnit.SECONDS);
++            if (faces == null || faces.isEmpty()) {
++                if (working != source) working.recycle();
+                 return null;
+             }
+-            PointF mid = new PointF();
+-            faces[0].getMidPoint(mid);
+-            return new FaceFrame(rgb565, mid, faces[0].eyesDistance());
++
++            Face best = faces.get(0);
++            int bestArea = 0;
++            for (Face candidate : faces) {
++                Rect box = candidate.getBoundingBox();
++                int area = Math.max(0, box.width()) * Math.max(0, box.height());
++                if (area > bestArea) {
++                    best = candidate;
++                    bestArea = area;
++                }
++            }
++
++            Rect bounds = best.getBoundingBox();
++            Bitmap rgb565 = working.copy(Bitmap.Config.RGB_565, false);
++            if (working != source) working.recycle();
++            if (rgb565 == null) return null;
++
++            PointF midpoint = new PointF(bounds.exactCenterX(), bounds.exactCenterY());
++            float eyeDistance = Math.max(20f, bounds.width() / 2.35f);
++            FaceLandmark left = best.getLandmark(FaceLandmark.LEFT_EYE);
++            FaceLandmark right = best.getLandmark(FaceLandmark.RIGHT_EYE);
++            if (left != null && right != null) {
++                PointF lp = left.getPosition();
++                PointF rp = right.getPosition();
++                float dx = lp.x - rp.x;
++                float dy = lp.y - rp.y;
++                float measured = (float) Math.sqrt(dx * dx + dy * dy);
++                if (measured >= 12f) eyeDistance = measured;
++            }
++            return new FaceFrame(rgb565, midpoint, eyeDistance);
+         } catch (Throwable ignored) {
+-            rgb565.recycle();
++            if (working != source && working != null && !working.isRecycled()) working.recycle();
+             return null;
+         }
+     }
+--- a/app/src/main/java/com/fantest/ownerguard/SelfieVerificationActivity.java
++++ b/app/src/main/java/com/fantest/ownerguard/SelfieVerificationActivity.java
+@@ -6,7 +6,7 @@
+ import android.graphics.Bitmap;
+ import android.graphics.Color;
+ import android.graphics.ImageFormat;
+-import android.graphics.PointF;
++import android.graphics.Rect;
+ import android.graphics.SurfaceTexture;
+ import android.hardware.camera2.CameraAccessException;
+ import android.hardware.camera2.CameraCaptureSession;
+@@ -15,7 +15,6 @@
+ import android.hardware.camera2.CameraManager;
+ import android.hardware.camera2.CaptureRequest;
+ import android.hardware.camera2.params.StreamConfigurationMap;
+-import android.media.FaceDetector;
+ import android.media.Image;
+ import android.media.ImageReader;
+ import android.os.Bundle;
+@@ -42,6 +41,11 @@
+ import java.util.List;
+ import java.util.Locale;
+ 
++import com.google.mlkit.vision.common.InputImage;
++import com.google.mlkit.vision.face.Face;
++import com.google.mlkit.vision.face.FaceDetection;
++import com.google.mlkit.vision.face.FaceDetectorOptions;
++
+ public class SelfieVerificationActivity extends SecureActivity {
+     private static final int REQUIRED_FRAMES = 3;
+ 
+@@ -60,7 +64,9 @@
+     private int sensorOrientation = 270;
+     private int stable;
+     private boolean capturing;
++    private boolean faceDetectionBusy;
+     private int completedFrames;
++    private com.google.mlkit.vision.face.FaceDetector mlFaceDetector;
+     private final List<FaceSimilarity.Result> frameResults = new ArrayList<>();
+ 
+     private final Runnable analyzer = new Runnable() {
+@@ -88,6 +94,13 @@
+             finish();
+             return;
+         }
++        mlFaceDetector = FaceDetection.getClient(new FaceDetectorOptions.Builder()
++                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
++                .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
++                .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
++                .setMinFaceSize(0.10f)
++                .enableTracking()
++                .build());
+         manager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
+         build();
+     }
+@@ -262,42 +275,53 @@
+     }
+ 
+     private void analyze() {
+-        Bitmap bitmap = null;
+-        Bitmap rgb = null;
+-        try {
+-            bitmap = preview.getBitmap(360, 480);
+-            if (bitmap == null) return;
+-            rgb = bitmap.copy(Bitmap.Config.RGB_565, false);
+-            FaceDetector.Face[] faces = new FaceDetector.Face[1];
+-            int found = new FaceDetector(rgb.getWidth(), rgb.getHeight(), 1).findFaces(rgb, faces);
+-            if (found < 1 || faces[0] == null) {
+-                stable = 0;
+-                status.setText("No face detected — face the camera directly");
+-                return;
+-            }
+-            PointF midpoint = new PointF();
+-            faces[0].getMidPoint(midpoint);
+-            float x = midpoint.x / rgb.getWidth();
+-            float y = midpoint.y / rgb.getHeight();
+-            float ratio = faces[0].eyesDistance() / rgb.getWidth();
+-            boolean good = x > 0.20f && x < 0.80f
+-                    && y > 0.18f && y < 0.80f
+-                    && ratio > 0.050f && ratio < 0.34f;
+-            if (!good) {
+-                stable = 0;
+-                status.setText("Center your face and adjust the distance");
+-                return;
+-            }
+-            stable++;
+-            status.setText("Clear face — sample " + (completedFrames + 1) + " of " + REQUIRED_FRAMES
+-                    + " in " + Math.max(1, 2 - stable));
+-            if (stable >= 2) capture();
+-        } catch (Throwable ignored) {
+-            stable = 0;
+-        } finally {
+-            if (rgb != null && !rgb.isRecycled()) rgb.recycle();
+-            if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
+-        }
++        if (faceDetectionBusy || mlFaceDetector == null) return;
++        final Bitmap bitmap = preview.getBitmap(360, 480);
++        if (bitmap == null) return;
++
++        faceDetectionBusy = true;
++        mlFaceDetector.process(InputImage.fromBitmap(bitmap, 0))
++                .addOnSuccessListener(faces -> {
++                    if (isFinishing() || capturing || completedFrames >= REQUIRED_FRAMES) return;
++                    if (faces == null || faces.isEmpty()) {
++                        stable = 0;
++                        status.setText("No face detected — face the camera directly");
++                        return;
++                    }
++                    if (faces.size() != 1) {
++                        stable = 0;
++                        status.setText("Only one face should be visible");
++                        return;
++                    }
++
++                    Face face = faces.get(0);
++                    Rect bounds = face.getBoundingBox();
++                    float x = bounds.exactCenterX() / Math.max(1f, bitmap.getWidth());
++                    float y = bounds.exactCenterY() / Math.max(1f, bitmap.getHeight());
++                    float ratio = (bounds.width() / Math.max(1f, bitmap.getWidth())) / 2.35f;
++                    boolean good = x > 0.20f && x < 0.80f
++                            && y > 0.18f && y < 0.80f
++                            && ratio > 0.050f && ratio < 0.34f
++                            && Math.abs(face.getHeadEulerAngleZ()) <= 20f;
++                    if (!good) {
++                        stable = 0;
++                        status.setText("Center your face, keep your head upright, and adjust the distance");
++                        return;
++                    }
++
++                    stable++;
++                    status.setText("Clear face — sample " + (completedFrames + 1) + " of " + REQUIRED_FRAMES
++                            + " in " + Math.max(1, 2 - stable));
++                    if (stable >= 2) capture();
++                })
++                .addOnFailureListener(error -> {
++                    stable = 0;
++                    status.setText("Face detector unavailable — hold still and retry");
++                })
++                .addOnCompleteListener(task -> {
++                    faceDetectionBusy = false;
++                    if (!bitmap.isRecycled()) bitmap.recycle();
++                });
+     }
+ 
+     private void capture() {
+@@ -435,6 +459,10 @@
+ 
+     @Override protected void onDestroy() {
+         closeCamera();
++        if (mlFaceDetector != null) {
++            try { mlFaceDetector.close(); } catch (Exception ignored) {}
++            mlFaceDetector = null;
++        }
+         super.onDestroy();
+     }
+ 
+--- a/app/src/main/java/com/fantest/ownerguard/CloudSyncStatusView.java
++++ b/app/src/main/java/com/fantest/ownerguard/CloudSyncStatusView.java
+@@ -1,5 +1,6 @@
+ package com.fantest.ownerguard;
+ 
++import android.annotation.SuppressLint;
+ import android.content.Context;
+ import android.graphics.Color;
+ import android.graphics.drawable.GradientDrawable;
+@@ -10,6 +11,7 @@
+ import android.widget.TextView;
+ 
+ /** Live, self-refreshing Cloud Vault synchronization state for native OwnerGuard pages. */
++@SuppressLint("AppCompatCustomView")
+ final class CloudSyncStatusView extends TextView {
+     private final Handler handler = new Handler(Looper.getMainLooper());
+     private final Runnable refresh = new Runnable() {
