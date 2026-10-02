@@ -1,0 +1,10 @@
+OwnerGuard Android v1.0.45 — Face enrollment hotfix
+
+- Replaces legacy android.media.FaceDetector in guided enrollment, owner descriptor generation, and selfie verification with bundled ML Kit face detection.
+- Preserves five-angle owner enrollment, quality thresholds, head-pose guidance, and the existing OEM live-preview fallback.
+- Rejects multiple visible faces during enrollment and verification.
+- Checks common camera rotations before rejecting a captured enrollment sample.
+- Avoids applying JPEG orientation twice on Samsung devices.
+- Keeps all face processing local to the device; no hosted face service is introduced.
+- Fixes the existing CloudSyncStatusView lint gate so the hotfix passes the canonical Android lint build.
+- Version: 1.0.45 (versionCode 10045).
