@@ -15,6 +15,7 @@ import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.PointF;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.graphics.drawable.GradientDrawable;
@@ -26,7 +27,6 @@ import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.AudioManager;
-import android.media.FaceDetector;
 import android.media.Image;
 import android.media.ImageReader;
 import android.media.ToneGenerator;
@@ -52,7 +52,13 @@ import android.widget.Toast;
 
 import java.nio.ByteBuffer;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
+
+import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.face.Face;
+import com.google.mlkit.vision.face.FaceDetection;
+import com.google.mlkit.vision.face.FaceDetectorOptions;
 
 public class EnrollmentActivity extends SecureActivity {
     private static final String BG = "#07111F";
@@ -120,8 +126,10 @@ public class EnrollmentActivity extends SecureActivity {
     private boolean enrollmentReset;
     private boolean enrollmentCompleted;
     private boolean analysisRunning;
+    private boolean faceDetectionBusy;
     private long cooldownUntil;
     private LiveFace lastLiveFace;
+    private com.google.mlkit.vision.face.FaceDetector mlFaceDetector;
 
     private final Runnable faceLoop = new Runnable() {
         @Override public void run() {
@@ -151,6 +159,13 @@ public class EnrollmentActivity extends SecureActivity {
                 if (voiceReady && enrollmentReset) speak(POSE_TITLES[poseIndex] + ". " + POSE_HINTS[poseIndex], true);
             }
         });
+        mlFaceDetector = FaceDetection.getClient(new FaceDetectorOptions.Builder()
+                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+                .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
+                .setMinFaceSize(0.12f)
+                .enableTracking()
+                .build());
         cameraManager = (CameraManager) getSystemService(Context.CAMERA_SERVICE);
         buildUi();
         new AlertDialog.Builder(this)
@@ -363,46 +378,56 @@ public class EnrollmentActivity extends SecureActivity {
     }
 
     private void analyzeLivePreview() {
-        Bitmap bitmap = null;
-        try {
-            bitmap = preview.getBitmap(360, 480);
-            if (bitmap == null) return;
-            LiveFace face = detectLiveFace(bitmap);
-            lastLiveFace = face;
-            applyLiveFace(face);
-        } catch (Throwable ignored) {
-            stableFrames = 0;
-        } finally {
-            if (bitmap != null) bitmap.recycle();
-        }
+        if (faceDetectionBusy || mlFaceDetector == null) return;
+        final Bitmap bitmap = preview.getBitmap(360, 480);
+        if (bitmap == null) return;
+
+        faceDetectionBusy = true;
+        mlFaceDetector.process(InputImage.fromBitmap(bitmap, 0))
+                .addOnSuccessListener(faces -> {
+                    if (!analysisRunning || isFinishing()) return;
+                    LiveFace face = detectLiveFace(bitmap, faces);
+                    lastLiveFace = face;
+                    applyLiveFace(face);
+                })
+                .addOnFailureListener(error -> {
+                    if (!analysisRunning || isFinishing()) return;
+                    stableFrames = 0;
+                    lastLiveFace = LiveFace.none("Face detector unavailable. Hold the phone steady and try again.");
+                    applyLiveFace(lastLiveFace);
+                })
+                .addOnCompleteListener(task -> {
+                    faceDetectionBusy = false;
+                    if (!bitmap.isRecycled()) bitmap.recycle();
+                });
     }
 
-    private LiveFace detectLiveFace(Bitmap source) {
-        Bitmap rgb565 = source.copy(Bitmap.Config.RGB_565, false);
-        if (rgb565 == null) return LiveFace.none("Preparing face detector…");
-        FaceDetector.Face[] faces = new FaceDetector.Face[1];
-        int count;
-        try {
-            count = new FaceDetector(rgb565.getWidth(), rgb565.getHeight(), 1).findFaces(rgb565, faces);
-        } catch (Throwable t) {
-            rgb565.recycle();
-            return LiveFace.none("Face detector unavailable");
-        }
-        if (count < 1 || faces[0] == null) {
-            rgb565.recycle();
+    private LiveFace detectLiveFace(Bitmap source, List<Face> faces) {
+        if (faces == null || faces.isEmpty()) {
             return LiveFace.none("Place your face inside the oval");
         }
-        FaceDetector.Face f = faces[0];
-        PointF mid = new PointF(); f.getMidPoint(mid);
-        float eye = f.eyesDistance();
-        float nx = mid.x / Math.max(1f, rgb565.getWidth());
-        float ny = mid.y / Math.max(1f, rgb565.getHeight());
-        float ratio = eye / Math.max(1f, rgb565.getWidth());
-        float yaw = safePose(f, FaceDetector.Face.EULER_Y);
-        float pitch = safePose(f, FaceDetector.Face.EULER_X);
-        float roll = safePose(f, FaceDetector.Face.EULER_Z);
-        double brightness = sampleBrightness(rgb565);
-        rgb565.recycle();
+        if (faces.size() != 1) {
+            return new LiveFace(true, false, 0.5f, 0.45f, 0.17f,
+                    0f, 0f, 0f, sampleBrightness(source),
+                    "Only one face should be visible during enrollment");
+        }
+
+        Face face = faces.get(0);
+        Rect bounds = face.getBoundingBox();
+        float width = Math.max(1f, source.getWidth());
+        float height = Math.max(1f, source.getHeight());
+        float nx = bounds.exactCenterX() / width;
+        float ny = bounds.exactCenterY() / height;
+
+        // Existing quality gates are calibrated to inter-eye distance. ML Kit
+        // reports a face rectangle reliably on modern Samsung builds, so use
+        // an equivalent estimated eye-distance ratio for the same thresholds.
+        float ratio = (bounds.width() / width) / 2.35f;
+        float yaw = face.getHeadEulerAngleY();
+        float pitch = face.getHeadEulerAngleX();
+        float roll = face.getHeadEulerAngleZ();
+        double brightness = sampleBrightness(source);
+
         boolean centered = nx > 0.31f && nx < 0.69f && ny > 0.29f && ny < 0.66f;
         if (ratio < 0.085f) return new LiveFace(true, false, nx, ny, ratio, yaw, pitch, roll, brightness, "Move closer");
         if (ratio > 0.245f) return new LiveFace(true, false, nx, ny, ratio, yaw, pitch, roll, brightness, "Move slightly farther away");
@@ -412,10 +437,6 @@ public class EnrollmentActivity extends SecureActivity {
         if (Math.abs(roll) > 16) return new LiveFace(true, false, nx, ny, ratio, yaw, pitch, roll, brightness, "Keep your head upright");
         PoseCheck check = poseCheck(nx, ny, yaw, pitch);
         return new LiveFace(true, check.ready, nx, ny, ratio, yaw, pitch, roll, brightness, check.message);
-    }
-
-    private float safePose(FaceDetector.Face face, int axis) {
-        try { return face.pose(axis); } catch (Throwable ignored) { return 0f; }
     }
 
     private double sampleBrightness(Bitmap b) {
@@ -549,10 +570,9 @@ public class EnrollmentActivity extends SecureActivity {
             byte[] bytes = new byte[buffer.remaining()]; buffer.get(bytes);
             Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
             if (bitmap == null) throw new IllegalStateException("Front-camera JPEG could not be decoded");
-            Bitmap upright = rotate(bitmap, jpegOrientation());
-            if (upright != bitmap) bitmap.recycle();
-            bitmap = upright;
             String pose = POSE_NAMES[Math.min(capturePoseIndex, POSE_NAMES.length - 1)];
+            // FaceSimilarity checks all common camera rotations. Avoid a second
+            // manual rotation here because Samsung may already apply JPEG_ORIENTATION.
             FaceSimilarity.EnrollmentResult result = FaceSimilarity.enrollGuided(this, bitmap, pose);
             bitmap.recycle();
             LiveFace capturedFace = lastLiveFace;
@@ -729,6 +749,7 @@ public class EnrollmentActivity extends SecureActivity {
         mainHandler.removeCallbacks(faceLoop);
         if (tones != null) { try { tones.release(); } catch (Exception ignored) {} tones = null; }
         if (voice != null) { try { voice.stop(); voice.shutdown(); } catch (Exception ignored) {} voice = null; }
+        if (mlFaceDetector != null) { try { mlFaceDetector.close(); } catch (Exception ignored) {} mlFaceDetector = null; }
         if (isFinishing() && enrollmentReset && !enrollmentCompleted) FaceSimilarity.clear(this);
         if (guideView != null) guideView.stopAnimation();
         super.onDestroy();
