@@ -6,8 +6,8 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Matrix;
 import android.graphics.PointF;
+import android.graphics.Rect;
 import android.media.ExifInterface;
-import android.media.FaceDetector;
 import android.util.Base64;
 
 import java.io.File;
@@ -15,6 +15,14 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+import com.google.android.gms.tasks.Tasks;
+import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.face.Face;
+import com.google.mlkit.vision.face.FaceDetection;
+import com.google.mlkit.vision.face.FaceDetectorOptions;
+import com.google.mlkit.vision.face.FaceLandmark;
 
 /**
  * Lightweight offline owner-similarity signal.
@@ -31,6 +39,13 @@ final class FaceSimilarity {
     private static final String OWNER_POSE = "owner_face_pose_";
     private static final int N = 32;
     static final int MAX_SAMPLES = 5;
+    private static final com.google.mlkit.vision.face.FaceDetector ML_FACE_DETECTOR =
+            FaceDetection.getClient(new FaceDetectorOptions.Builder()
+                    .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+                    .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_ALL)
+                    .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
+                    .setMinFaceSize(0.10f)
+                    .build());
 
     static final class Result {
         final boolean faceFound;
@@ -274,29 +289,46 @@ final class FaceSimilarity {
     }
 
     private static DescriptorData descriptor(Bitmap source, boolean strictEnrollment) {
-        FaceFrame frame = detect(source);
-        if (frame == null) {
-            return new DescriptorData(null,
-                    "No clear face detected. Keep your full face inside the guide and look toward the camera.");
+        if (source == null) {
+            return new DescriptorData(null, "No image was captured. Try again.");
         }
-        float ratio = frame.eye / Math.max(1f, frame.bitmap.getWidth());
-        if (strictEnrollment && ratio < 0.060f) {
+
+        String lastError = "No clear face detected. Keep your full face inside the guide and look toward the camera.";
+        int[] rotations = new int[]{0, 90, 270, 180};
+        for (int degrees : rotations) {
+            Bitmap oriented = degrees == 0 ? source : rotateCopy(source, degrees);
+            if (oriented == null) continue;
+
+            FaceFrame frame = detect(oriented);
+            if (degrees != 0 && oriented != source && !oriented.isRecycled()) oriented.recycle();
+            if (frame == null) continue;
+
+            float ratio = frame.eye / Math.max(1f, frame.bitmap.getWidth());
+            if (strictEnrollment && ratio < 0.060f) {
+                frame.bitmap.recycle();
+                lastError = "Move closer. Your face is too small for a secure enrollment sample.";
+                continue;
+            }
+
+            Bitmap crop = cropFace(frame, 4.40f, 0.42f);
             frame.bitmap.recycle();
-            return new DescriptorData(null, "Move closer. Your face is too small for a secure enrollment sample.");
+            if (crop == null || crop.getWidth() < 96) {
+                if (crop != null) crop.recycle();
+                lastError = "Move closer and keep your face centered.";
+                continue;
+            }
+
+            DescriptorData result = normalizeCrop(crop, strictEnrollment);
+            crop.recycle();
+            if (result.bytes != null) return result;
+            lastError = result.error;
         }
-        Bitmap crop = cropFace(frame, 4.40f, 0.42f);
-        frame.bitmap.recycle();
-        if (crop == null || crop.getWidth() < 96) {
-            if (crop != null) crop.recycle();
-            return new DescriptorData(null, "Move closer and keep your face centered.");
-        }
-        DescriptorData result = normalizeCrop(crop, strictEnrollment);
-        crop.recycle();
-        return result;
+        return new DescriptorData(null, lastError);
     }
 
     private static FaceFrame detect(Bitmap source) {
         if (source == null || source.getWidth() < 120 || source.getHeight() < 120) return null;
+
         int maxSide = Math.max(source.getWidth(), source.getHeight());
         Bitmap working = source;
         if (maxSide > 1280) {
@@ -305,21 +337,49 @@ final class FaceSimilarity {
                     Math.max(2, Math.round(source.getWidth() * scale)),
                     Math.max(2, Math.round(source.getHeight() * scale)), true);
         }
-        Bitmap rgb565 = working.copy(Bitmap.Config.RGB_565, false);
-        if (working != source) working.recycle();
-        if (rgb565 == null) return null;
-        FaceDetector.Face[] faces = new FaceDetector.Face[1];
+
         try {
-            int found = new FaceDetector(rgb565.getWidth(), rgb565.getHeight(), 1).findFaces(rgb565, faces);
-            if (found < 1 || faces[0] == null) {
-                rgb565.recycle();
+            List<Face> faces = Tasks.await(
+                    ML_FACE_DETECTOR.process(InputImage.fromBitmap(working, 0)),
+                    3, TimeUnit.SECONDS);
+            if (faces == null || faces.isEmpty()) {
+                if (working != source) working.recycle();
                 return null;
             }
-            PointF mid = new PointF();
-            faces[0].getMidPoint(mid);
-            return new FaceFrame(rgb565, mid, faces[0].eyesDistance());
+
+            Face best = faces.get(0);
+            int bestArea = 0;
+            for (Face candidate : faces) {
+                Rect box = candidate.getBoundingBox();
+                int area = Math.max(0, box.width()) * Math.max(0, box.height());
+                if (area > bestArea) {
+                    best = candidate;
+                    bestArea = area;
+                }
+            }
+
+            Rect bounds = best.getBoundingBox();
+            Bitmap rgb565 = working.copy(Bitmap.Config.RGB_565, false);
+            if (working != source) working.recycle();
+            if (rgb565 == null) return null;
+
+            PointF midpoint = new PointF(bounds.exactCenterX(), bounds.exactCenterY());
+            float eyeDistance = Math.max(20f, bounds.width() / 2.35f);
+            com.google.mlkit.vision.face.FaceLandmark left =
+                    best.getLandmark(FaceLandmark.LEFT_EYE);
+            com.google.mlkit.vision.face.FaceLandmark right =
+                    best.getLandmark(FaceLandmark.RIGHT_EYE);
+            if (left != null && right != null) {
+                PointF lp = left.getPosition();
+                PointF rp = right.getPosition();
+                float dx = lp.x - rp.x;
+                float dy = lp.y - rp.y;
+                float measured = (float) Math.sqrt(dx * dx + dy * dy);
+                if (measured >= 12f) eyeDistance = measured;
+            }
+            return new FaceFrame(rgb565, midpoint, eyeDistance);
         } catch (Throwable ignored) {
-            rgb565.recycle();
+            if (working != source && working != null && !working.isRecycled()) working.recycle();
             return null;
         }
     }
