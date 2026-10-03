@@ -1,0 +1,10 @@
+OwnerGuard Android v1.0.46 — Production face enrollment release
+
+- Production release of the validated 1.0.45 Samsung face-enrollment hotfix.
+- Keeps bundled ML Kit face detection for enrollment, descriptor generation, and selfie verification.
+- Preserves five-angle owner enrollment and rejects multiple visible faces.
+- Keeps common camera-orientation fallback before rejecting a captured enrollment sample.
+- Retains the Samsung JPEG-orientation safeguard that prevents double rotation.
+- Keeps all face processing local to the device.
+- Functional code is unchanged from the validated 1.0.45 hotfix; versionCode is advanced so Google Play Production can accept a unique release.
+- Version: 1.0.46 (versionCode 10046).
