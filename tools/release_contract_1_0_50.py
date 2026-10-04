@@ -19,7 +19,7 @@ for token in (
     "private void startIndexLoad()",
     "indexExecutor.execute",
     "Indexing encrypted incidents in the background",
-    "Load " + next + " more",
+    "Button more = button(\"Load \" + next + \" more\"",
     "Refresh vault",
 ):
     if token not in VAULT:
