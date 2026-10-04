@@ -12,29 +12,31 @@ for token in ("versionCode 10050","versionName '1.0.50'","targetSdk 36","com.and
         raise SystemExit("build invariant missing: "+token)
 
 for token in (
-    "private static final int PAGE_SIZE = 40;",
+    "DEFAULT_PAGE_SIZE = 24",
+    "Select all filtered",
+    "Export this range",
+    "VaultExportManager.exportIncidents",
     "Executors.newSingleThreadExecutor()",
     "private List<EventRow> indexedEvents;",
-    "private int visibleLimit = PAGE_SIZE;",
+    "private boolean indexLoading;",
     "private void startIndexLoad()",
     "indexExecutor.execute",
     "Indexing encrypted incidents in the background",
-    "Button more = button(\"Load \" + next + \" more\"",
-    "Refresh vault",
+    "List<EventRow> allEvents = new ArrayList<>(indexedEvents);",
 ):
     if token not in VAULT:
         raise SystemExit("vault scalability invariant missing: "+token)
 
 if "List<EventRow> allEvents = loadAllEvents();" in VAULT:
-    raise SystemExit("vault still performs eager synchronous full indexing in render()")
+    raise SystemExit("vault still performs synchronous full indexing in render()")
 
 for token in (
-    'ITEM_ALREADY_OWNED',
-    'Purchase.PurchaseState.PENDING',
-    'Restoring your existing OwnerGuard Pro lifetime purchase',
-    'purchase pending — lifetime access activates when Google Play completes the payment',
-    'Merchant account and product activation may still be pending',
-    'ownerguard_pro_lifetime',
+    "ITEM_ALREADY_OWNED",
+    "Purchase.PurchaseState.PENDING",
+    "Restoring your existing OwnerGuard Pro lifetime purchase",
+    "purchase pending — lifetime access activates when Google Play completes the payment",
+    "Merchant account and product activation may still be pending",
+    "ownerguard_pro_lifetime",
 ):
     if token not in PRO:
         raise SystemExit("Pro lifetime invariant missing: "+token)
