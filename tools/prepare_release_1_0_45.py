@@ -15,7 +15,9 @@ def main() -> int:
     run(sys.executable, str(TOOLS / "prepare_release_1_0_44.py"))
     if not PATCH.is_file():
         raise SystemExit("required 1.0.45 face enrollment patch is missing")
-    run("git", "apply", "--whitespace=nowarn", str(PATCH))
+    # Windows Python rewrite steps may produce CRLF; apply the release patch
+    # without accepting unrelated source changes or relaxing context matching.
+    run("git", "apply", "--ignore-space-change", "--whitespace=nowarn", str(PATCH))
     run(sys.executable, str(TOOLS / "release_contract_1_0_45.py"))
     print("OwnerGuard 1.0.45 deterministic preparation: PASS")
     return 0
